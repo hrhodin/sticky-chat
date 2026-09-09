@@ -10,7 +10,7 @@
 Keep your thoughts linked: Attach sticky notes to chat output, then hand the quoted
 text plus your notes back to the agent in one paste.
 
-<img src="docs/demo-claude.gif" width="640"
+<img src="https://raw.githubusercontent.com/hrhodin/sticky-chat/main/docs/demo-claude.gif" width="640"
      alt="Three notes taken on what Claude Code drew, handed back in one paste">
 
 Select any part of the output with the cursor: a few characters, a line, or
