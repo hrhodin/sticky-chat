@@ -1,0 +1,20 @@
+#!/usr/bin/env python3
+"""Run sticky straight from a checkout, without installing it.
+
+The same program as `sticky-chat` beside it, under the shorter name the
+console scripts also install, so `sticky codex ~/proj` works from a checkout.
+The generated tmux config records whatever path was used to launch sticky, so
+a session started through this script keeps working after `git pull` without
+reinstalling anything.
+"""
+
+import os
+import sys
+
+sys.path.insert(0, os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src"))
+
+from sticky_chat import main  # noqa: E402
+
+if __name__ == "__main__":
+    sys.exit(main())

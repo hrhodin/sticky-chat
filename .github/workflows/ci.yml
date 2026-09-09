@@ -1,0 +1,70 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - run: pip install ruff
+      # No `ruff format` on purpose: the source is hand-wrapped with aligned
+      # trailing comments that the formatter flattens. See pyproject.toml.
+      - run: ruff check .
+
+  test:
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        # Every supported Python on Linux; the ends of the range on macOS,
+        # where the runners are slower and scarcer.
+        os: [ubuntu-latest]
+        python: ["3.9", "3.10", "3.11", "3.12", "3.13"]
+        include:
+          - os: macos-latest
+            python: "3.9"
+          - os: macos-latest
+            python: "3.13"
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Install tmux
+        run: |
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            brew install tmux
+          else
+            sudo apt-get update && sudo apt-get install -y tmux
+          fi
+
+      # The integration tests need floating panes, so 3.7 or newer. The
+      # distribution tmux is usually older - Ubuntu 24.04 ships 3.4 - and
+      # the suite skips them rather than failing. Printing the version makes
+      # that visible in the log instead of looking like missing coverage.
+      - name: Show tmux version
+        run: tmux -V
+
+      - run: pip install -e ".[dev]"
+
+      - name: Fast tests
+        run: pytest -m "not integration"
+
+      # Split from the fast ones so a failure says at a glance whether the
+      # logic broke or the tmux driving did.
+      - name: Integration tests
+        run: pytest -m integration

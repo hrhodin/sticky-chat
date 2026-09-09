@@ -1,0 +1,26 @@
+__pycache__/
+*.pyc
+build/
+.venv/
+.ruff_cache/
+.coverage
+.DS_Store
+
+# Reference clone of upstream tmux, kept locally for reading the source.
+# Not part of sticky-chat and not needed to run it.
+tmux/
+dist/
+*.egg-info/
+.pytest_cache/
+
+# tmux -v debug logs, wherever they are run from
+tmux-client-*.log
+tmux-server-*.log
+
+# Notes quote whatever was on screen. `sticky-chat --local` keeps them in
+# the project rather than in ~/.sticky, so this is here for anyone who runs
+# sticky on sticky - and for every clone of it.
+.sticky/
+
+# raw demo takes; only the chosen recording is committed
+docs/takes/

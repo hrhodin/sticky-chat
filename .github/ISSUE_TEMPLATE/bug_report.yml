@@ -1,0 +1,104 @@
+name: Bug report
+description: Something sticky-chat does that it should not, or does not do that it should.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for taking the time. The version and environment fields
+        below are not a formality: most of the awkward bugs in this project
+        have turned out to be a tmux version, a terminal emulator, or two
+        panes wired to the wrong note store.
+
+        Please check the troubleshooting table at the end of `README.md`
+        first, in case it is already there.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, what you saw, and what you expected instead.
+      placeholder: |
+        I dragged across three lines of Claude's output, typed a note and
+        pressed Enter. The note appeared in the sidebar but three rows too
+        low, and did not move when I scrolled.
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: >
+        As far as you can narrow it down. If it only happens with a
+        particular kind of output from Claude, say so.
+      placeholder: |
+        1. sticky-chat start ~/some-project
+        2. ask Claude for something that prints a long table
+        3. drag across a line inside the table
+    validations:
+      required: true
+
+  - type: input
+    id: tmux-version
+    attributes:
+      label: tmux version
+      description: The output of `tmux -V`.
+      placeholder: tmux 3.5a
+    validations:
+      required: true
+
+  - type: input
+    id: python-version
+    attributes:
+      label: Python version
+      description: The output of `python3 -V`.
+      placeholder: Python 3.12.7
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      description: The name and version. Say if you are in WSL.
+      placeholder: macOS 15.1, or Ubuntu 24.04, or Debian 12 under WSL2
+    validations:
+      required: true
+
+  - type: input
+    id: terminal
+    attributes:
+      label: Terminal emulator
+      description: >
+        With its version if you know it. This decides a great deal about
+        the mouse, the clipboard and synchronized output.
+      placeholder: iTerm2 3.5.11, Ghostty 1.0, Terminal.app, kitty, WezTerm, GNOME Terminal
+    validations:
+      required: true
+
+  - type: textarea
+    id: panes
+    attributes:
+      label: Pane listing
+      description: |
+        Please paste the output of this, run while sticky-chat is up and
+        in the state where the bug shows. It is the fastest way to see how
+        the panes are wired, and it has found several real bugs on its own.
+        Use your own socket name after `-L` if you have set `STICKY_SOCKET`.
+
+        ```sh
+        tmux -L sticky list-panes -a -F '#{window_index} #{pane_id} role=#{@sticky_role} store=#{@sticky_store}'
+        ```
+      render: shell
+
+  - type: textarea
+    id: anything-else
+    attributes:
+      label: Anything else
+      description: >
+        A screenshot of the window, any error text sticky-chat printed,
+        the contents of `~/.sticky/user.conf` if you have one, or what
+        `sticky-chat list --all` shows.
+    validations:
+      required: false

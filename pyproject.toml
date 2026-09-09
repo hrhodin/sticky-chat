@@ -1,0 +1,83 @@
+[build-system]
+requires = ["hatchling>=1.27"]      # PEP 639 licence metadata below
+build-backend = "hatchling.build"
+
+[project]
+name = "sticky-chat"
+dynamic = ["version"]
+description = "Sticky notes for AI coding agents in tmux: annotate what the agent printed, then hand the quoted lines plus your notes back in one paste. Works with Claude Code."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.9"
+authors = [{ name = "Helge Rhodin" }]
+keywords = ["tmux", "ai", "agent", "coding-agent", "llm", "claude", "notes", "annotation", "terminal"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Operating System :: MacOS :: MacOS X",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Terminals",
+    "Topic :: Utilities",
+]
+dependencies = []                      # stdlib only, on purpose
+
+[project.urls]
+Homepage = "https://github.com/hrhodin/sticky-chat"
+Repository = "https://github.com/hrhodin/sticky-chat"
+Issues = "https://github.com/hrhodin/sticky-chat/issues"
+
+[project.scripts]
+sticky-chat = "sticky_chat:main"
+sticky = "sticky_chat:main"        # the short spelling; `sticky codex .` works
+
+[project.optional-dependencies]
+dev = ["pytest>=7", "ruff>=0.6"]
+
+[tool.hatch.version]
+path = "src/sticky_chat/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/sticky_chat"]
+
+[tool.ruff]
+line-length = 79
+target-version = "py39"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "C4", "SIM", "RUF"]
+ignore = [
+    "E501",     # line length is checked by the formatter, not the linter
+    "SIM105",   # contextlib.suppress reads worse than try/except here
+]
+
+# The scripts that make the README recording print and match real terminal
+# glyphs - a prompt marker is `\u276f`, and calling it ambiguous with `>` is
+# the whole reason it is there.
+[tool.ruff.lint.per-file-ignores]
+"docs/*.py" = ["RUF001", "RUF002", "RUF003"]
+
+# No `ruff format`. The source is hand-wrapped to 79 columns with trailing
+# comments aligned into a second column, which the formatter flattens into
+# left-aligned comments that read as if they belonged to the next line.
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "integration: drives a real tmux server; needs tmux 3.7 or newer",
+]
+addopts = "-q"
+
+[tool.hatch.build.targets.sdist]
+# The design and the research are kept for the record, not for readers of
+# a release; docs/DEV.md ships, because it is what a contributor opens.
+exclude = ["docs/PLAN.md", "docs/NOTES.md", "tmux/", ".github/"]

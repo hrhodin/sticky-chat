@@ -1,0 +1,61 @@
+name: Feature request
+description: Something sticky-chat should be able to do and cannot.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Read the keys and commands tables in `README.md` first — a fair
+        number of requests turn out to be a key that already exists.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: >
+        What you were trying to do, and where the tool got in the way.
+        Describe the situation rather than the solution; it is often the
+        more useful half.
+      placeholder: >
+        I take a dozen notes across a long session and then want to send
+        only the three about one file, but sending takes every pending
+        note at once.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you would like it to do
+      description: >
+        If it is a key or a command, say which. If it changes what the
+        sidebar shows, say what you would expect to see.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What you have tried instead
+      description: >
+        Existing keys, `sticky-chat` subcommands, tmux settings in
+        `~/.sticky/user.conf`, or doing it by hand. If something nearly
+        works, say where it falls short.
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: constraints
+    attributes:
+      label: Fits the project
+      description: >
+        Not a test you have to pass, only a prompt to think about. If your
+        idea needs one of these, say so in the description and why it is
+        worth it.
+      options:
+        - label: It needs no new runtime dependency — the program is standard library only.
+          required: false
+        - label: It does not need a patched or replaced tmux, or a particular terminal.
+          required: false
+        - label: It works without a mouse, or it is an addition to something that does.
+          required: false

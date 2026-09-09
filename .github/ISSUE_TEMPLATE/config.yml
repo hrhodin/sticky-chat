@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: How to use sticky-chat
+    url: https://github.com/hrhodin/sticky-chat/blob/main/README.md
+    about: Keys, commands, flags, where notes live, and the troubleshooting table.
+  - name: How sticky-chat works inside
+    url: https://github.com/hrhodin/sticky-chat/blob/main/docs/DEV.md
+    about: Note placement, the generated tmux config, the sidebar loop, the tall window.
+  - name: Contributing
+    url: https://github.com/hrhodin/sticky-chat/blob/main/.github/CONTRIBUTING.md
+    about: Setting up, running the tests, and what a change should look like.
