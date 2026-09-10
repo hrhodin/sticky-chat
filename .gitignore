@@ -42,3 +42,7 @@ docs/relift.py
 docs/repace.py
 docs/trim-cast.py
 docs/takes/
+
+# Claude Code settings and hooks for this working copy, not for readers
+# of the project.
+.claude/
