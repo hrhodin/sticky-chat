@@ -502,6 +502,35 @@ class TestReopeningOneRememberedTab:
         assert "reopen" in sticky.build_parser().sticky_commands
 
 
+class TestTheDependencyPackagingCannotDeclare:
+    """tmux is not a Python package, so nothing installs it for you.
+
+    Which makes the first run the moment it matters: `pip install` says
+    nothing about it, and the first thing sticky does is ask tmux a
+    question. A traceback out of subprocess is a poor way to be told.
+    """
+
+    def test_a_missing_tmux_is_said_plainly(self, sticky, monkeypatch):
+        def gone(*_args, **_kwargs):
+            raise FileNotFoundError(2, "No such file or directory", "tmux")
+
+        monkeypatch.setattr("sticky_chat.tmux.subprocess.run", gone)
+        with pytest.raises(SystemExit) as leaving:
+            sticky.Tmux("nowhere").run("list-panes")
+        assert leaving.value.code == 1
+
+    def test_it_says_how_to_get_one(self, sticky, monkeypatch, capsys):
+        def gone(*_args, **_kwargs):
+            raise FileNotFoundError(2, "No such file or directory", "tmux")
+
+        monkeypatch.setattr("sticky_chat.tmux.subprocess.run", gone)
+        with pytest.raises(SystemExit):
+            sticky.Tmux("nowhere").run("list-panes")
+        said = capsys.readouterr().err
+        assert "not on your PATH" in said
+        assert "brew install tmux" in said and "apt install tmux" in said
+
+
 class TestAgentProfiles:
     """Everything that knows *which* agent is in the pane is one record.
 

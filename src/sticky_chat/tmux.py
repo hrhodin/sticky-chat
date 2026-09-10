@@ -4,8 +4,16 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
 
 DEFAULT_SOCKET = "sticky"
+
+
+def die(message: str) -> None:
+    """Say what is wrong and stop. Here rather than in util, which imports
+    nothing from here and should stay that way."""
+    print(f"sticky: {message}", file=sys.stderr)
+    raise SystemExit(1)
 SESSION_NAME = "sticky"
 
 # --------------------------------------------------------------------- tmux
@@ -21,12 +29,21 @@ class Tmux:
 
     def run(self, *args: str, input_text: str | None = None,
             check: bool = True) -> str:
-        proc = subprocess.run(
-            self._base() + list(args),
-            input=input_text,
-            capture_output=True,
-            text=True,
-        )
+        try:
+            proc = subprocess.run(
+                self._base() + list(args),
+                input=input_text,
+                capture_output=True,
+                text=True,
+            )
+        except FileNotFoundError:
+            # The one dependency a Python package cannot declare, failing at
+            # the first thing sticky asks of it. Said plainly here rather
+            # than as a traceback about `tmux` from inside subprocess.
+            die("tmux is not on your PATH. Install it with "
+                "`brew install tmux`, `apt install tmux` or "
+                "`dnf install tmux`; sticky-chat drives it and cannot "
+                "run without it.")
         if check and proc.returncode != 0:
             raise RuntimeError(
                 f"tmux {' '.join(args)}: {proc.stderr.strip() or proc.returncode}")
