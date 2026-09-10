@@ -5,13 +5,15 @@ build-backend = "hatchling.build"
 [project]
 name = "sticky-chat"
 dynamic = ["version"]
-description = "Sticky notes for AI coding agents in tmux: annotate what the agent printed, then hand the quoted lines plus your notes back in one paste. Works with Claude Code."
+description = "Sticky notes for AI coding agents in tmux: annotate what the agent printed, then hand the quoted lines plus your notes back in one paste. Profiles for Claude Code, Codex, Gemini CLI and Antigravity."
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
 requires-python = ">=3.9"
 authors = [{ name = "Helge Rhodin" }]
-keywords = ["tmux", "ai", "agent", "coding-agent", "llm", "claude", "notes", "annotation", "terminal"]
+keywords = ["tmux", "ai", "agent", "coding-agent", "llm", "claude",
+            "claude-code", "codex", "gemini", "antigravity", "notes",
+            "annotation", "terminal"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Environment :: Console",
