@@ -24,3 +24,21 @@ tmux-server-*.log
 
 # raw demo takes; only the chosen recording is committed
 docs/takes/
+
+# The recording toolchain and the working notes: kept on this machine, not
+# in the published tree. `docs/record-demo.sh` and `docs/trim-cast.py` are
+# what remade docs/demo-claude.gif, and the takes are what they were cut
+# from.
+docs/NOTES.md
+docs/PLAN.md
+docs/demo-agent.py
+docs/demo-claude.cast
+docs/demo-claude.tape
+docs/demo-generic.gif
+docs/demo-generic.tape
+docs/pick.sh
+docs/record-demo.sh
+docs/relift.py
+docs/repace.py
+docs/trim-cast.py
+docs/takes/
