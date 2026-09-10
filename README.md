@@ -49,10 +49,18 @@ keys fill tmux's own paste buffer instead.
 
 ```sh
 uv tool install sticky-chat      # or: pipx install sticky-chat
+pip install sticky-chat          # works too; see below
 ```
 
 That puts `sticky-chat` on your `PATH`, and `sticky` as a shorter name
 for the same command.
+
+There are no dependencies to resolve - the program is standard library
+only - so `pip` is as good as the others at fetching it. What the first two
+add is a virtualenv of their own: a command-line tool installed with `pip`
+lands in whichever environment happens to be active, which is a nuisance
+when that environment changes or goes away, and on a system Python it is
+refused outright.
 
 If you would rather run the source you can inspect and edit:
 
