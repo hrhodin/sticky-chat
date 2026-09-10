@@ -1,10 +1,10 @@
 # Sticky-Chat
 
-[![CI](https://github.com/hrhodin/sticky-chat/actions/workflows/ci.yml/badge.svg)](https://github.com/hrhodin/sticky-chat/actions/workflows/ci.yml)
+[![agents](https://img.shields.io/badge/agents-claude%20%C2%B7%20codex%20%C2%B7%20gemini%20%C2%B7%20antigravity-blue.svg)](#another-agent)
 [![PyPI](https://img.shields.io/pypi/v/sticky-chat.svg)](https://pypi.org/project/sticky-chat/)
 [![Python](https://img.shields.io/badge/python-3.9%2B-blue.svg)](https://www.python.org/downloads/)
 [![tmux](https://img.shields.io/badge/tmux-3.7%2B-blue.svg)](https://github.com/tmux/tmux)
-[![agents](https://img.shields.io/badge/agents-claude%20%C2%B7%20codex%20%C2%B7%20gemini%20%C2%B7%20antigravity-blue.svg)](#another-agent)
+[![CI](https://github.com/hrhodin/sticky-chat/actions/workflows/ci.yml/badge.svg)](https://github.com/hrhodin/sticky-chat/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
 Keep your thoughts linked: Attach sticky notes to chat output, then hand the quoted
