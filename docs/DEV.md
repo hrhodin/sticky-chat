@@ -1006,6 +1006,12 @@ says so and changes nothing: the notes stay pending, which is the right
 failure - a batch marked sent that never arrived is worse than one still
 waiting.
 
+`C-g T` opens one from the keyboard: `new --ask --agent shell`, the same
+project prompt `C-g c` uses. `c` inherits the agent of the tab it was
+pressed in, which is right nearly always and never when what is wanted is a
+prompt of your own, so the two keys sit beside each other rather than one
+growing a flag.
+
 The `shell` profile is what makes this worth having. It is a tab with no
 agent: `$SHELL`, read as the tab opens rather than written down, and no
 session flags, no fork, no discovery, because there is no conversation to

@@ -208,6 +208,7 @@ tmux keeps whatever prefix you configured.
 | `C-g S` | the same, and press Enter for you |
 | `C-g u` | unmark the last batch: pending again, not taken back (`C-g U`) |
 | `C-g c` | new tab: asks for the project directory, Tab completes (`C-g t`) |
+| `C-g T` | new tab with a shell in it, no agent |
 | `C-g C` | the same, but the tab gets a window taller than the terminal |
 | `C-g F` | fork this conversation into a new tab |
 | `C-g o` | reopen a closed tab: lists what is remembered, a number picks |
