@@ -247,6 +247,23 @@ GENERIC = Agent(
 )
 
 
+# A tab with no agent in it at all. Notes are taken the same way - drag,
+# type, and they hang off the rows they were taken on - and then go to
+# whichever tab should see them, by its number. Reading a log, a test run
+# or a diff is the case: the output worth annotating is not always printed
+# by something you can talk to.
+#
+# `$SHELL` is read as the tab is opened rather than written down, so it is
+# the shell of whoever opens it.
+SHELL = Agent(
+    name="shell",
+    label="a shell",
+    short="the shell",
+    command=os.environ.get("SHELL") or "/bin/sh",
+    exit_hint="leaving the shell closes the tab",
+)
+
+
 # Untested: nobody has run sticky-chat on it. Everything below was read off
 # Gemini's own documentation, and everything that was not is left empty.
 #
@@ -398,7 +415,7 @@ ANTIGRAVITY = Agent(
 
 
 AGENTS = {agent.name: agent
-          for agent in (CLAUDE, GENERIC, GEMINI, CODEX, ANTIGRAVITY)}
+          for agent in (CLAUDE, GENERIC, SHELL, GEMINI, CODEX, ANTIGRAVITY)}
 
 DEFAULT_AGENT = CLAUDE.name
 

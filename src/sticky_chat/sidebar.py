@@ -119,6 +119,7 @@ def help_sections(agent: Agent = CLAUDE) -> list[tuple[str, list[str]]]:
             "C-s while typing sends too,",
             "  alt-enter sends and enters",
             "C-g u unmarks the last batch",
+            "1-9 send to that tab instead",
         ]),
         ("Keyboard", [
             "Arrows/kj pick \u00b7 PgUp/Dn faster",
@@ -945,6 +946,15 @@ def cmd_sidebar(args) -> int:
                     last_sig = None
                 if key == "s":                            # same letter as C-g s
                     run("commit")
+                    last_mtime = -1.0
+                    last_sig = None
+                if key.isdigit() and key != "0":
+                    # The numbers on the status line are the tabs, so they
+                    # are the numbers to press: 2 hands what is pending to
+                    # whatever is running in tab 2. Notes taken while
+                    # reading a shell belong to whichever agent should see
+                    # them, and that is rarely the pane they were read in.
+                    run("commit", "--to-tab", key)
                     last_mtime = -1.0
                     last_sig = None
     except KeyboardInterrupt:

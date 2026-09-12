@@ -115,13 +115,20 @@ sticky claude ~/my-project         # the same as sticky-chat start, shorter
 sticky gemini ~/my-project         # Gemini CLI instead
 sticky codex  ~/my-project         # Codex CLI instead
 sticky agy    ~/my-project         # Google's Antigravity CLI
+sticky shell  ~/my-project         # no agent at all, just a shell
 sticky-chat start ~/p --agent generic --agent-cmd aider   # anything else
 ```
 
 An agent's name in that position picks its profile, unless a directory of
-that name is sitting there, which wins. Nothing you touch changes with the
-agent - the same keys, the same sidebar, the same send. What changes is
-only what the agent itself can be asked for:
+that name is sitting there, which wins. `shell` is the one that is not an
+agent: a tab with a shell in it, for reading a log or a test run or a diff.
+Notes are taken there the same way, and then go to whichever tab should
+see them - press its number in the sidebar, the one tmux shows in the
+status line.
+
+Nothing else you touch changes with the agent - the same keys, the same
+sidebar, the same send. What changes is only what the agent itself can be
+asked for:
 
 | agent | reopens the same conversation | `C-g F` forks it |
 |---|---|---|
@@ -204,6 +211,7 @@ tmux keeps whatever prefix you configured.
 | `C-g C` | the same, but the tab gets a window taller than the terminal |
 | `C-g F` | fork this conversation into a new tab |
 | `C-g o` | reopen a closed tab: lists what is remembered, a number picks |
+| `1`-`9` in the sidebar | send the pending notes to that tab instead of this one |
 | `C-g r` | reload: rewrite the config, restart the sidebars (`C-g R`) |
 | `C-g L` | print the pending notes into the pane |
 | `C-g n` `C-g w` | next tab, choose a tab |

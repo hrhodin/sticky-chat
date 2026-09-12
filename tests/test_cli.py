@@ -531,6 +531,47 @@ class TestTheDependencyPackagingCannotDeclare:
         assert "brew install tmux" in said and "apt install tmux" in said
 
 
+class TestSendingToAnotherTab:
+    """Notes are taken where the output is and belong where the agent is.
+
+    Reading a log, a test run or a diff in a shell tab is the case that
+    needs this: the output worth annotating is not always printed by
+    something you can talk to, so the batch goes to a tab by its number -
+    the number tmux already shows in the status line.
+    """
+
+    def panes(self, rows):
+        class Fake:
+            def run(self, *_args, **_kwargs):
+                return "\n".join(rows)
+        return Fake()
+
+    def test_a_number_finds_that_tab_s_agent(self, sticky):
+        tm = self.panes(["1\t%0\tclaude", "1\t%1\tsidebar",
+                         "2\t%2\tclaude", "2\t%3\tsidebar"])
+        assert sticky.tab_pane(tm, 2) == "%2"
+        assert sticky.tab_pane(tm, 1) == "%0"
+
+    def test_the_sidebar_is_never_the_answer(self, sticky):
+        """Nor is an open note prompt: a batch pasted into either would be
+        typed at the notes rather than at the agent."""
+        tm = self.panes(["3\t%9\tsidebar", "3\t%8\tnote", "3\t%7\tclaude"])
+        assert sticky.tab_pane(tm, 3) == "%7"
+
+    def test_a_tab_that_is_not_there_says_so(self, sticky):
+        tm = self.panes(["1\t%0\tclaude", "1\t%1\tsidebar"])
+        assert sticky.tab_pane(tm, 4) == ""
+
+    def test_the_shell_profile_runs_a_shell_and_promises_nothing(self, sticky):
+        """A tab with no agent in it. It cannot be resumed or forked -
+        there is no conversation - and that is the whole of it."""
+        shell = sticky.SHELL
+        assert shell.name == "shell" and shell.command
+        assert not shell.can_resume and not shell.can_fork
+        assert not shell.can_discover and not shell.names_sessions
+        assert sticky.require_agent("shell") is shell
+
+
 class TestAgentProfiles:
     """Everything that knows *which* agent is in the pane is one record.
 

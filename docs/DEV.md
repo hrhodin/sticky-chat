@@ -988,6 +988,30 @@ on `resume --last` or `--continue` as it did before. Codex's flags were read
 back off `codex resume --help` on the same version and match what the profile
 carries.
 
+## Sending a batch somewhere else
+
+Where a note is read from and where it is handed to are two questions, and
+until now one answer served both. `commit --to-tab N` separates them: the
+notes come from this tab's store, the paste goes to the agent in tab N.
+
+The number is the one tmux prints in the status line, because that is the
+number on screen when somebody decides where a note should go. `tab_pane`
+asks the windows directly rather than counting them - a closed tab leaves a
+gap in the numbering, and the status line shows that gap too - and skips
+any pane whose `@sticky_role` is `sidebar` or `note`, since a batch pasted
+into either would be typed at the notes instead of at the agent.
+
+In the sidebar, `1`-`9` are bound to exactly that. A tab that is not there
+says so and changes nothing: the notes stay pending, which is the right
+failure - a batch marked sent that never arrived is worse than one still
+waiting.
+
+The `shell` profile is what makes this worth having. It is a tab with no
+agent: `$SHELL`, read as the tab opens rather than written down, and no
+session flags, no fork, no discovery, because there is no conversation to
+name. Reading a log, a test run or a diff is the case - output worth
+annotating is not always printed by something you can talk to.
+
 ## Remembering tabs
 
 `~/.sticky/windows/<session-id>.json` holds one record per tab: the project,

@@ -199,6 +199,9 @@ def build_parser() -> argparse.ArgumentParser:
                    help="press Enter too, instead of leaving it to you")
     p.add_argument("--quiet", action="store_true",
                    help="say nothing: key bindings show stdout in the pane")
+    p.add_argument("--to-tab", type=int, metavar="N",
+                   help="paste into tab N's agent instead of this tab's - "
+                        "the numbers tmux shows in the status line")
     p.set_defaults(func=cmd_commit)
 
     p = common(sub.add_parser(

@@ -276,6 +276,28 @@ def resolve_project(tm: Tmux, pane: str | None, explicit: str | None) -> str:
     return os.getcwd()
 
 
+def tab_pane(tm, number: int) -> str:
+    """The agent pane of tab `number`, or empty if there is no such tab.
+
+    The number is the one tmux prints in the status line, because that is
+    the one on screen when somebody decides where a note should go. Windows
+    are asked directly rather than counted: a closed tab leaves a gap in the
+    numbering, and the gap is what the status line shows too.
+    """
+    try:
+        listing = tm.run("list-panes", "-a", "-F",
+                         "#{window_index}\t#{pane_id}\t#{@sticky_role}")
+    except RuntimeError:
+        return ""
+    for line in listing.splitlines():
+        index, _, rest = line.partition("\t")
+        pane, _, role = rest.partition("\t")
+        if index.strip() == str(number) and role.strip() not in ("sidebar",
+                                                                 "note", ""):
+            return pane.strip()
+    return ""
+
+
 def sidebars_showing(tm: Tmux, project: str = "",
                      directory: str = "") -> list[tuple[str, str]]:
     """Every sidebar drawing this project or this store: its dir and its pid.

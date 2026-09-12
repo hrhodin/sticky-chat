@@ -46,6 +46,7 @@ from .store import (
     session_dir,
     session_named,
     sidebar_showing,
+    tab_pane,
     tabs_showing,
     windows_dir,
     with_words,
@@ -414,6 +415,22 @@ def cmd_commit(args) -> int:
                        getattr(args, 'store', None))
     notes = store.load()
 
+    # Where the notes are read from and where they are handed to are two
+    # different questions. Normally the same tab answers both; `--to-tab`
+    # says the notes were taken here and belong over there - a shell you
+    # were reading output in, handed to whichever agent should see it.
+    target = pane
+    wanted = getattr(args, "to_tab", None)
+    if wanted:
+        target = tab_pane(tm, wanted)
+        if not target:
+            message = f"no agent in tab {wanted}"
+            if getattr(args, "client", None):
+                tm.ok("display-message", "-c", args.client,
+                      f"sticky: {message}")
+            print(f"sticky: {message}", file=sys.stderr)
+            return 1
+
     if pane and tm.pane_exists(pane):
         try:
             placements(tm, pane, notes)
@@ -431,24 +448,24 @@ def cmd_commit(args) -> int:
     if not args.quiet:          # a key binding's stdout lands in the pane
         print(text)
 
-    if not args.no_paste and pane and tm.pane_exists(pane):
+    if not args.no_paste and target and tm.pane_exists(target):
         fd, tmp = tempfile.mkstemp(prefix="sticky-commit-")
         try:
             with os.fdopen(fd, "w") as fh:
                 fh.write(text)
             # Reading back is over the moment you send: leave copy mode, or
             # the block would land in a prompt you cannot see.
-            tm.ok("send-keys", "-X", "-t", pane, "cancel")
+            tm.ok("send-keys", "-X", "-t", target, "cancel")
             tm.run("load-buffer", "-b", "sticky", tmp)
-            tm.run("paste-buffer", "-p", "-b", "sticky", "-t", pane)
-            expand_paste(tm, pane, agent_of(tm, pane))
+            tm.run("paste-buffer", "-p", "-b", "sticky", "-t", target)
+            expand_paste(tm, target, agent_of(tm, target))
             tm.ok("delete-buffer", "-b", "sticky")
             if args.send:
                 time.sleep(0.15)      # let Claude take the bracketed paste in
-                tm.run("send-keys", "-t", pane, "Enter")
-            # Either way you end up at Claude's prompt, which is where the
-            # answer is going to appear.
-            tm.ok("select-pane", "-t", pane)
+                tm.run("send-keys", "-t", target, "Enter")
+            # Either way you end up at the prompt it went to, which is
+            # where the answer is going to appear - another tab included.
+            tm.ok("select-pane", "-t", target)
         finally:
             os.unlink(tmp)
 
