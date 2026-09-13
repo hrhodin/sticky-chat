@@ -1572,10 +1572,16 @@ def cmd_start(args) -> int:
               f"profile: what is in it was read off {agent.label}'s own "
               f"documentation rather than tried. Expect to fix it.",
               file=sys.stderr)
-    if source and not extra and not args.agent_cmd:
+    asked_for = bool(getattr(args, "agent", None))
+    if source and not extra and not args.agent_cmd and not asked_for:
         # Opened from a running tab: the same agent with the same arguments,
         # but not the same conversation. The id belongs to the tab still
         # running it, and the agent will not open it twice.
+        #
+        # Unless a profile was named. `C-g c` means "another one like this",
+        # and inheriting the command line is how it keeps the flags; `C-g T`
+        # means "a shell, not whatever I am in", and inheriting there gave a
+        # tab that said `shell` and ran the agent it was opened beside.
         inherited = without_session(
             launched_as(tm, claude_pane(tm, source) or source, agent), agent)
     if inherited:

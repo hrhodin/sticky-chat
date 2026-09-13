@@ -301,6 +301,34 @@ def test_a_claude_that_will_not_start_is_said_so(
     assert not after - before, "a sidebar was left behind"
 
 
+def test_a_named_profile_is_not_overruled_by_the_tab_it_came_from(
+        tmux, server, run_sticky, project, close_windows):
+    """`C-g c` means "another one like this" and inherits the command line,
+    which is how it keeps the flags. `C-g T` means "a shell, not whatever I
+    am in" - and inheriting there gave a tab that said `shell` in its
+    options and ran the agent it was opened beside.
+    """
+    first = run_sticky("start", project, "--detach", "--agent", "generic",
+                       "--agent-cmd", fake_claude(project)).strip()
+    close_windows.append(first)
+    time.sleep(0.8)
+
+    same = run_sticky("new", project, "--detach", "--from", first).strip()
+    close_windows.append(same)
+    shell = run_sticky("new", project, "--detach", "--from", first,
+                       "--agent", "shell").strip()
+    close_windows.append(shell)
+    time.sleep(0.8)
+
+    def launched(pane):
+        return tmux("display-message", "-p", "-t", pane,
+                    "#{@sticky_agent_cmd}").strip()
+
+    assert launched(same) == launched(first), "C-g c still copies the line"
+    assert launched(shell) != launched(first), "a named profile starts itself"
+    assert launched(shell).endswith("sh"), f"a shell, not {launched(shell)!r}"
+
+
 def test_output_wakes_the_sidebar(
         tmux, server, run_sticky, sticky_home, project, close_windows):
     """There is no heartbeat left, so this is the only thing that redraws.
