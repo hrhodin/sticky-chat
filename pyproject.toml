@@ -62,11 +62,6 @@ ignore = [
     "SIM105",   # contextlib.suppress reads worse than try/except here
 ]
 
-# The scripts that make the README recording print and match real terminal
-# glyphs - a prompt marker is `\u276f`, and calling it ambiguous with `>` is
-# the whole reason it is there.
-[tool.ruff.lint.per-file-ignores]
-"docs/*.py" = ["RUF001", "RUF002", "RUF003"]
 
 # No `ruff format`. The source is hand-wrapped to 79 columns with trailing
 # comments aligned into a second column, which the formatter flattens into
@@ -80,6 +75,8 @@ markers = [
 addopts = "-q"
 
 [tool.hatch.build.targets.sdist]
-# The design and the research are kept for the record, not for readers of
-# a release; docs/DEV.md ships, because it is what a contributor opens.
-exclude = ["docs/PLAN.md", "docs/NOTES.md", "tmux/", ".github/"]
+# docs/DEV.md ships, because it is what a contributor opens. The recording
+# does not: the README points at it by URL, so a copy in the archive is
+# 380KB nobody looks at - two thirds of the sdist. `.github/` is the
+# repository's own furniture.
+exclude = ["docs/demo-claude.gif", ".github/"]
