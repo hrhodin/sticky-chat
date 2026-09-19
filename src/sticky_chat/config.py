@@ -120,7 +120,6 @@ bind C run-shell -b '@BIN@ new --ask --virtual-rows @ROWS@ --socket "#{socket_pa
 # A tab with no agent in it: a shell, for reading a log, a test run or a
 # diff. `c` inherits the agent of the tab you are in, which is right nearly
 # always and never when what you want is a prompt of your own.
-bind T run-shell -b '@BIN@ new --ask --agent shell --socket "#{socket_path}" --client "#{client_name}" --from "#{pane_id}"'
 # o for open: the same prompt again, listing the tabs sticky remembers
 # instead of asking for a project - the way back into a conversation you
 # closed, without leaving the session to run `resume` in a shell. A tab that

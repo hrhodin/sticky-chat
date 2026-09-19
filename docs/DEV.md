@@ -1186,11 +1186,23 @@ says so and changes nothing: the notes stay pending, which is the right
 failure - a batch marked sent that never arrived is worse than one still
 waiting.
 
-`C-g T` opens one from the keyboard: `new --ask --agent shell`, the same
-project prompt `C-g c` uses. `c` inherits the agent of the tab it was
-pressed in, which is right nearly always and never when what is wanted is a
-prompt of your own, so the two keys sit beside each other rather than one
-growing a flag.
+`C-g c` opens one, because the prompt asks which agent as well as which
+project. A tab is two decisions and only the first was ever put: the agent
+was inherited from the tab the key was pressed in, which is right nearly
+always and never when what is wanted is a prompt of your own. So the second
+line opens on the inherited answer and Enter takes it - the common case is
+the keystrokes it always was - and typing over it is how you get a shell,
+or codex beside a Claude tab.
+
+Only what `installed_agents` finds is offered: a tab in an agent this
+machine does not have is a tab that exits as it opens. The inherited one is
+listed whether or not it is there, since it is demonstrably running next
+door. Taking the offered answer is not the same as passing `--agent`, which
+would stop the new tab inheriting the flags of the one beside it, so the
+choice is only carried through when it is a change.
+
+This is what retired `C-g T`. A separate key for the shell was a second way
+to open a tab, and there is no room for two.
 
 The `shell` profile is what makes this worth having. It is a tab with no
 agent: `$SHELL`, read as the tab opens rather than written down, and no

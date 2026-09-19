@@ -12,7 +12,15 @@ import tempfile
 import time
 import uuid
 
-from .agents import CLAUDE, Agent, agent_named, require_agent
+from .agents import (
+    CLAUDE,
+    DEFAULT_AGENT,
+    Agent,
+    agent_named,
+    installed_agents,
+    known_name,
+    require_agent,
+)
 from .clipboard import to_clipboard
 from .config import (
     DEFAULT_SIDEBAR_WIDTH,
@@ -1607,14 +1615,25 @@ def cmd_restore(args) -> int:
     return 0
 
 
-def ask_project(tm: Tmux, source: str | None, given: str | None) -> str:
-    """Ask which project a new tab is for, completing paths on Tab.
+def ask_project(tm: Tmux, source: str | None,
+                given: str | None) -> tuple[str, str]:
+    """Ask what a new tab is for, and what should be running in it.
 
     tmux's own command-prompt cannot complete a filename, so a path with one
     letter wrong came back as a failed run-shell somewhere off screen, and no
     tab. A prompt of our own can: it has a real terminal, so Tab works, and a
     path that does not exist is said so on the spot, with what you typed
-    still on the line to correct. Empty string means it was cancelled.
+    still on the line to correct.
+
+    The second line is which agent, because a tab is two decisions and only
+    one of them was ever asked. It opens on the one in the tab you pressed
+    the key in - beside a Gemini tab the answer is almost always Gemini
+    again - and Enter takes it, so the common case is the keystrokes it
+    always was. Only what is installed is offered: a tab in an agent this
+    machine does not have is a tab that exits as it opens. `shell` is in the
+    list, which is what retired the separate key for it.
+
+    An empty project means it was cancelled.
     """
     start = given or ""
     if not start and source:
@@ -1629,14 +1648,39 @@ def ask_project(tm: Tmux, source: str | None, given: str | None) -> str:
         outcome, typed = prompt_line("project> ", text,
                                      complete=complete_path)
         if outcome != "save":
-            return ""
+            return "", ""
         text = typed.strip()
         if not text:
-            return ""
+            return "", ""
         path = os.path.abspath(os.path.expanduser(text))
         if os.path.isdir(path):
-            return path
+            break
         print(f"{DIM}no such directory: {path}{RESET}\n")
+
+    here = agent_of(tm, source).name if source else DEFAULT_AGENT
+    offered = [agent.name for agent in installed_agents()]
+    if here not in offered:
+        offered.insert(0, here)
+
+    def complete_agent(word: str) -> tuple[str, list[str]]:
+        fits = [name for name in offered if name.startswith(word.lower())]
+        if not fits:
+            return word, []
+        return os.path.commonprefix(fits), fits
+
+    listed = " \u00b7 ".join(offered)
+    print(f"\n{DIM}{listed}{RESET}")
+    want = here
+    while True:
+        outcome, typed = prompt_line("agent>   ", want,
+                                     complete=complete_agent)
+        if outcome != "save":
+            return "", ""
+        want = typed.strip() or here
+        name = known_name(want)
+        if name:
+            return path, name
+        print(f"{DIM}no such agent: {want}{RESET}\n")
 
 
 def open_project_prompt(tm: Tmux, binary: str, args) -> int:
@@ -1725,9 +1769,17 @@ def cmd_start(args) -> int:
     if getattr(args, "ask", False):
         return open_project_prompt(tm, binary, args)
     if getattr(args, "ask_here", False):
-        project = ask_project(tm, getattr(args, "source_pane", None), args.dir)
+        project, chose = ask_project(tm, getattr(args, "source_pane", None),
+                                     args.dir)
         if not project:
             return 0                    # cancelled: nothing was opened
+        source = getattr(args, "source_pane", None)
+        here = agent_of(tm, source).name if source else DEFAULT_AGENT
+        if chose != here:
+            # Only when it is a change. Taking the answer the prompt opened
+            # with would read as "--agent was given", and that is what stops
+            # a tab inheriting the flags of the one it was opened beside.
+            args.agent = chose
     else:
         project = os.path.abspath(args.dir or os.getcwd())
     if not os.path.isdir(project):

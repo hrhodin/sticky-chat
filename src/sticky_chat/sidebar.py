@@ -157,8 +157,8 @@ def help_sections(agent: Agent = CLAUDE) -> list[tuple[str, list[str]]]:
             "Tab or > < change tab",
         ]),
         ("Tabs", [
-            "C-g c new \u00b7 n next \u00b7 w list",
-            "C-g T new, a shell not an agent",
+            "C-g c new: it asks which agent",
+            "C-g n next \u00b7 C-g w list",
             "C-g C new, tall window",
             "C-g o reopens a closed tab",
             "C-g F forks chat and notes",

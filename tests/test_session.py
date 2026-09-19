@@ -219,6 +219,9 @@ def test_the_new_tab_key_asks_for_a_project_and_completes_it(
         typed("C-u")
         typed(str(home / "completed-pro"))
         typed("Tab", wait=0.5)          # one match, so Tab finishes the name
+        typed("Enter", wait=1.0)
+        # And then which agent, opening on the one this was pressed in:
+        # Enter takes it, so the common case is the keystrokes it always was.
         typed("Enter", wait=3.0)
 
         opened = [line.split("\t") for line in tmux(
@@ -232,6 +235,68 @@ def test_the_new_tab_key_asks_for_a_project_and_completes_it(
         roles = tmux("list-panes", "-t", f"sticky:{match[0]}",
                      "-F", "#{@sticky_role}").split()
         assert sorted(roles) == ["claude", "sidebar"]
+    finally:
+        subprocess.run(["tmux", "-L", OUTER, "kill-server"],
+                       capture_output=True)
+
+
+def test_the_new_tab_key_offers_another_agent(
+        tmux, server, run_sticky, sticky_home, tmp_path, close_windows):
+    """The second question, and the one that retired `C-g T`.
+
+    A tab is two decisions - what it is for, and what is running in it -
+    and only the first was ever asked, so every tab opened from a Claude
+    tab was another Claude tab whatever you wanted. Typing over the answer
+    is how you get a shell now, which is what the separate key did.
+    """
+    home = tmp_path / "second-question"
+    (home / "a-shell-please").mkdir(parents=True)
+    first = run_sticky("start", str(home), "--detach",
+                       "--agent-cmd", fake_claude(str(home))).strip()
+    close_windows.append(first)
+    time.sleep(0.8)
+    tmux("source-file", str(Path(sticky_home) / "tmux.conf"))
+    index = tmux("display-message", "-p", "-t", first,
+                 "#{window_index}").strip()
+
+    subprocess.run(["tmux", "-L", OUTER, "kill-server"], capture_output=True)
+    subprocess.run(["tmux", "-L", OUTER, "new-session", "-d",
+                    "-x", "120", "-y", "40",
+                    f"tmux -L {SOCKET} attach -t sticky"],
+                   capture_output=True, check=True)
+    try:
+        time.sleep(1.0)
+        tmux("switch-client", "-t", f"sticky:{index}")
+        outer = subprocess.run(
+            ["tmux", "-L", OUTER, "display-message", "-p", "-t", "0",
+             "#{pane_id}"], capture_output=True, text=True).stdout.strip()
+
+        def typed(*keys, wait=0.3):
+            subprocess.run(["tmux", "-L", OUTER, "send-keys", "-t", outer,
+                            *keys], capture_output=True)
+            time.sleep(wait)
+
+        typed("C-g", wait=0.2)
+        typed("c", wait=1.5)
+        typed("C-u")
+        typed(str(home / "a-shell-please"))
+        typed("Enter", wait=1.0)
+        # It opens on `claude`, the tab this was pressed in. Type over it.
+        typed("C-u")
+        typed("shell")
+        typed("Enter", wait=3.0)
+
+        opened = [line.split("\t") for line in tmux(
+            "list-windows", "-t", "sticky",
+            "-F", "#{window_index}\t#{window_name}").splitlines()]
+        match = [i for i, name in opened if name == "a-shell-please"]
+        assert match, f"the prompt opened no tab: {opened}"
+        close_windows.extend(
+            tmux("list-panes", "-t", f"sticky:{match[0]}",
+                 "-F", "#{pane_id}").split())
+        mark = tmux("show-options", "-wqv", "-t", f"sticky:{match[0]}",
+                    "@sticky_mark").strip()
+        assert mark == "$", f"a shell tab, not another claude one: {mark!r}"
     finally:
         subprocess.run(["tmux", "-L", OUTER, "kill-server"],
                        capture_output=True)

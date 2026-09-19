@@ -29,6 +29,8 @@ import glob
 import json
 import os
 import re
+import shlex
+import shutil
 import sqlite3
 from dataclasses import dataclass
 
@@ -467,6 +469,24 @@ def require_agent(name: str | None) -> Agent:
     found = AGENTS.get(known_name(name))
     if found is None:
         die(f"no such agent: {name}. Known: {', '.join(AGENTS)}")
+    return found
+
+
+def installed_agents() -> list["Agent"]:
+    """The profiles whose command this machine actually has.
+
+    Offering a tab in an agent that is not installed is offering a tab that
+    exits the moment it opens. `generic` is left out because it is not an
+    agent at all - it is the shape of one, and wants `--agent-cmd` to say
+    which - and the shell is always in, since something is always $SHELL.
+    """
+    found = []
+    for agent in AGENTS.values():
+        if agent is GENERIC:
+            continue
+        word = shlex.split(agent.command)[0] if agent.command else ""
+        if agent is SHELL or (word and shutil.which(word)):
+            found.append(agent)
     return found
 
 
