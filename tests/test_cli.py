@@ -1296,6 +1296,12 @@ class TestForkingWithoutANameForTheFork:
                 return "sticky:2"
             return self.option(target, template[2:-1])
 
+        def formats(self, *asks):
+            # What `nudge` asks, to find the sidebar to poke. There is no
+            # sidebar process behind this fake, so the answers say as much
+            # and the poke is skipped - the notes file is right either way.
+            return [self.fmt(target, template) for target, template in asks]
+
         def run(self, *args):
             if args[0] == "new-window":
                 self.launched = args[-1]

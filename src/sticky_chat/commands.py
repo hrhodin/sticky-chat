@@ -797,6 +797,12 @@ def cmd_fork(args) -> int:
     `--continue --fork-session`, codex with `codex fork --last` - and the
     fork gets its own copy of whatever was still pending, so asking there
     does not mark anything answered back here.
+
+    Here they are struck out. Carrying a question to a fork is a way of
+    saying it belongs over there, and two tabs both holding it pending is
+    two places to answer it and one of them wrong. Struck rather than
+    removed, because striking is a thing you can undo: `x` on the row
+    brings one back if the fork was not where it belonged after all.
     """
     tm = Tmux(args.socket)
     source = claude_pane(tm, args.pane)
@@ -881,6 +887,21 @@ def cmd_fork(args) -> int:
     # one the same way a fresh tab does.
     mark_launch(tm, left, agent, launched)
     open_sidebar(tm, self_path(), left, project, int(width), fork_dir)
+
+    # The notes went with the fork, so here they are struck out rather than
+    # left standing. Two tabs both holding the same question pending is two
+    # places to answer it and one of them wrong, and what a fork is for is
+    # asking it over there. Struck rather than removed because striking is
+    # a thing you can undo: `x` on the row brings one back if the fork was
+    # not where it belonged after all.
+    if carried:
+        moved = {note["id"] for note in carried}
+        notes = origin.load()
+        for note in notes:
+            if note["id"] in moved:
+                note["deleted"] = True
+        origin.save(notes)
+        nudge(tm, source)
     # And what `resume` re-runs. Claude's whole line is kept because
     # `resume_command` drops the branch words from it and asks for the id
     # instead; with no id to ask for there is nothing to drop them by, so

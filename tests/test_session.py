@@ -1187,6 +1187,21 @@ class TestForking:
         carried = notes_of(forked["project"], forked["dir"])
         assert sorted(n["note"] for n in carried) == ["carry me", "old news"]
 
+    def test_the_ones_that_went_are_struck_out_here(
+            self, forked, notes_of):
+        """Carrying a question to a fork says it belongs over there.
+
+        Left pending in both, it is two places to answer it and one of them
+        wrong. Struck rather than removed: striking is a thing you can undo,
+        so the row is still there to bring back if the fork turned out not
+        to be where it belonged.
+        """
+        left = notes_of(forked["project"], forked["origin_dir"])
+        assert {n["note"] for n in left} == {"carry me", "old news"}, \
+            "still here to be brought back"
+        assert all(n.get("deleted") for n in left), \
+            f"and struck out: {[(n['note'], n.get('deleted')) for n in left]}"
+
     def test_a_note_taken_there_lands_in_its_own_store(
             self, run_sticky, forked, notes_of):
         # Reading one store while writing another is invisible until a note
