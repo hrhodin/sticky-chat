@@ -8,6 +8,7 @@ import os
 import re
 import select
 import sys
+import time
 import unicodedata
 
 RESET = "\x1b[0m"
@@ -30,6 +31,10 @@ COL_FUZZY = "\x1b[38;5;208m"
 
 COL_FOOTER = "\x1b[36m"
 
+
+# What the sidebar's clock row answers to when it is clicked. Notes carry
+# uuids, so nothing else in a hit list can be mistaken for it.
+CLOCK_HIT = "@clock"
 
 STRIKE = "\x1b[9m"
 
@@ -238,6 +243,200 @@ def complete_path(text: str) -> tuple[str, list[str]]:
     if len(found) == 1:
         shared = shared.rstrip("/") + "/"
     return text + shared[len(stub):], [os.path.basename(p) for p in found]
+
+
+MERIDIEM = re.compile(r"(?<![\d:])(\d{1,2})(?::(\d{2}))?\s*([ap])\.?m\.?\s*$")
+
+
+def twenty_four_hour(said: str) -> str:
+    """`8pm` as `20:00`, `12:32 am` as `00:32`. Anything else, unchanged.
+
+    A rewrite rather than another shape to parse: everything downstream
+    already reads `20:00`, and an hour that has to be shifted by twelve
+    after `strptime` has built a struct is a second parser wearing the
+    first one's clothes. Only the end of the line is looked at, so the date
+    in `2026-09-16 12:32 am` is carried through untouched.
+    """
+    found = MERIDIEM.search(said)
+    if not found:
+        return said
+    hour, minute, half = found.group(1), found.group(2) or "00", found.group(3)
+    hour = int(hour)
+    if not 1 <= hour <= 12:
+        return said                    # `13pm` is not a time: let it fail
+    hour = hour % 12 + (12 if half == "p" else 0)
+    return f"{said[:found.start()]}{hour:02d}:{minute}"
+
+
+def when_to_send(text: str, now: float | None = None) -> float:
+    """A time to send at, as a unix timestamp. 0.0 if it cannot be read.
+
+    Three shapes, because three are what anybody types. `90m` and `4h` are
+    a wait; `00:32` is the next time the clock says that, tonight or
+    tomorrow; `2026-09-16 00:32` is exact, for when an agent has said which
+    day its limit resets.
+
+    The clock in the last two may wear an am or a pm - `8pm`, `3:00 PM`,
+    `2026-09-16 12:32 AM` - because agents write times the way people do,
+    and what one printed is what gets typed back here.
+
+    A time of day that has already passed today means tomorrow, which is
+    what somebody typing `00:32` at midnight means and never the opposite.
+    """
+    said = twenty_four_hour(text.strip().lower().lstrip("+"))
+    if not said:
+        return 0.0
+    now = time.time() if now is None else now
+
+    units = {"s": 1, "m": 60, "h": 3600, "d": 86400}
+    if said[-1] in units and said[:-1].replace(".", "", 1).isdigit():
+        return now + float(said[:-1]) * units[said[-1]]
+
+    for shape in ("%Y-%m-%d %H:%M", "%Y-%m-%dT%H:%M", "%d %b %Y %H:%M"):
+        try:
+            when = time.strptime(said, shape)
+        except ValueError:
+            continue
+        return time.mktime(when)
+
+    try:
+        hour, _, minute = said.partition(":")
+        hour, minute = int(hour), int(minute or 0)
+    except ValueError:
+        return 0.0
+    if not (0 <= hour < 24 and 0 <= minute < 60):
+        return 0.0
+    today = time.localtime(now)
+    when = time.mktime((today.tm_year, today.tm_mon, today.tm_mday,
+                         hour, minute, 0, 0, 0, -1))
+    return when if when > now else when + 86400
+
+
+# The word every one of these notices has in it, and the only thing that
+# makes a row worth reading a clock off. "reset" on its own is not one:
+# `git reset` goes past in this kind of pane all day.
+#
+# Nor is the bare word. `gh run list --limit 40 --jq '.createdAt[5:16]'` has
+# a limit and a colon between two numbers, and was read here as an agent
+# asking to be resumed at twenty past five - a shell is full of lines like
+# it. What the real notices share is not the word but the phrase around it,
+# so that is what is asked for.
+LIMIT_SAID = re.compile(
+    # The kind of limit, said in front of the word: "weekly limit",
+    # "5-hour limit", "usage limit".
+    r"\b(?:usage|rate|weekly|daily|monthly|hourly|\d+-hour)[\s-]limits?\b"
+    # Or the word and then what it did. The separator is whatever the
+    # vendor felt like putting there - Claude Code says
+    # "weekly limit \u00b7 resets", so a space is not enough to ask for.
+    r"|\blimits?\b[\s\u00b7\u2219\u2022:,.\u2013\u2014-]*(?:resets?|reached)\b",
+    re.I)
+
+# A clock, wearing an am or a pm or a colon. One or the other is required:
+# `resets 8` could be an hour or the eighth of something, and a guess that
+# might be either is not worth making.
+CLOCK_SAID = re.compile(r"\b\d{1,2}(?::\d{2})?\s*[ap]\.?m\.?\b"
+                        r"|\b\d{1,2}:\d{2}\b", re.I)
+
+MONTHS = ("jan", "feb", "mar", "apr", "may", "jun",
+          "jul", "aug", "sep", "oct", "nov", "dec")
+
+# `Sep 16th, 2026` immediately before the clock - and `Sep 19 at`, which
+# is the same thing with the year left off and a word in the way. The year
+# is optional because Claude Code does not print one, and the `at` because
+# it puts one between the date and the hour.
+DAY_SAID = re.compile(r"\b(" + "|".join(MONTHS) + r")"
+                      r"[a-z]*\.?\s+(\d{1,2})(?:st|nd|rd|th)?,?"
+                      r"(?:\s+(\d{4}))?[\s,]*(?:at\s*)?$", re.I)
+
+# How far back up the pane a notice still counts for. Counted from the last
+# row with anything on it rather than from the bottom of the screen: a pane
+# with room to spare ends in blanks, and they are not rows of output.
+#
+# Small on purpose. A notice is the last thing an agent says before it
+# stops, so all this has to clear is the agent's own furniture below it.
+# Measured on real panes: codex puts its notice at -6, and Claude Code
+# needs rather more room than that - a two-line notice, a blank, the
+# "done" line, and an input box that is six rows before the hint lines
+# under it, which had a real notice sitting at about -12. Ten missed it.
+#
+# Anything further up than this is something the pane is talking about
+# rather than something it is doing, and that is the whole difference. The
+# phrase `LIMIT_SAID` asks for is what does most of that work now, so this
+# can afford the margin.
+RESET_ROWS = 14
+
+
+def reset_notice(rows: list[str],
+                 now: float | None = None) -> tuple[str, str]:
+    """The time an agent said its limit resets, written as `--at` takes it.
+
+    Three wordings, from three agents that have actually printed them:
+
+        You've hit your usage limit. ... try again at Sep 16th, 2026 12:32 AM.
+        Your limit resets at 3:00 PM.
+        5-hour limit reached ∙ resets 8pm
+
+    What they share is the word "limit" and a clock after it, so that is
+    what is looked for, on one row at a time and taking the last row that
+    has both - the newest notice on screen is the one that is still true.
+    Only the last `RESET_ROWS` of output count, so a notice from a session
+    ago that happens to still be on a tall screen is not dug up. Anything
+    read out is handed to `when_to_send` and given back only if it reads,
+    so what comes out of here is always something that goes back in.
+
+    This is safe because it is never a decision. The answer is a default in
+    a prompt you can edit: a vendor that changes its wording leaves the
+    scan empty-handed, the prompt opens with nothing in it, and you type the
+    time - which is exactly what you did before there was a key for this,
+    minus the trip out to a shell. Nothing is ever sent on a guessed time
+    without somebody having seen that time and pressed Enter.
+    """
+    rows = list(rows)
+    while rows and not rows[-1].strip():
+        rows.pop()
+    found, dated, saw = "", False, ""
+    for row in rows[-RESET_ROWS:]:
+        said = LIMIT_SAID.search(row)
+        if not said:
+            continue
+        clock = CLOCK_SAID.search(row, said.end())
+        if not clock:
+            continue
+        day = DAY_SAID.search(row[:clock.start()])
+        found, dated, saw = clock.group(0), bool(day), row.strip()
+        if day:
+            month = MONTHS.index(day.group(1).lower()) + 1
+            year = day.group(3)
+            if not year:
+                # No year printed, so it is the coming one. This year
+                # unless that has long gone, which only happens across a
+                # new year - and a notice whose day went by last week is
+                # stale, not next year's: rolling a whole year forward
+                # would park a tab on a clock until next autumn.
+                moment = time.time() if now is None else now
+                year = time.localtime(moment).tm_year
+                guess = when_to_send(f"{year}-{month:02d}-"
+                                     f"{int(day.group(2)):02d} {found}", now)
+                if guess and moment - guess > 300 * 24 * 3600:
+                    year += 1
+            found = (f"{year}-{month:02d}-{int(day.group(2)):02d} "
+                     f"{found}")
+    if not found:
+        return "", ""
+    when = when_to_send(found, now)
+    if not when or when <= (time.time() if now is None else now):
+        # A notice left over from yesterday is not a guess. The shapes
+        # without a date already roll forward to the next time the clock
+        # says that, so only a dated one can land in the past - and a
+        # deadline already gone would fire the instant it was set.
+        return "", ""
+    return (time.strftime("%Y-%m-%d %H:%M" if dated else "%H:%M",
+                          time.localtime(when)), saw)
+
+
+def reset_time(rows: list[str], now: float | None = None) -> str:
+    """Just the time, for the callers that only ever wanted that."""
+    return reset_notice(rows, now)[0]
 
 
 def lay_out(text: str, width: int) -> tuple[list[str], list[tuple[int, int]]]:

@@ -99,6 +99,7 @@ class Agent:
     short: str                  # how it is named in a sentence
     command: str                # the program to run; empty means you say
     aliases: tuple[str, ...] = ()  # other names the same agent answers to
+    mark: str = "\u2022"          # one character, for the tab list
     tested: bool = True         # whether anybody has run sticky-chat on it
     caveat: str = ""            # what exactly is unproven, when some of it is
     exit_hint: str = "ending the agent closes the tab"
@@ -218,6 +219,7 @@ CLAUDE = Agent(
     label="Claude Code",
     short="Claude",
     command="claude",
+    mark="\u2726",          # the tab list says which agent
     exit_hint="/exit in Claude closes the tab",
     # Claude answers in prose instead of opening a question menu, which a
     # sidebar full of notes has no way to answer.
@@ -260,6 +262,7 @@ SHELL = Agent(
     label="a shell",
     short="the shell",
     command=os.environ.get("SHELL") or "/bin/sh",
+    mark="$",
     exit_hint="leaving the shell closes the tab",
 )
 
@@ -296,6 +299,7 @@ GEMINI = Agent(
     label="Gemini CLI",
     short="Gemini",
     command="gemini",
+    mark="\u2727",
     # Gemini answers under `✦` and marks a finished tool with `✓`; the rest
     # of the set is shared, and the fallback to column zero covers what is
     # not here. Its info banners are left out on purpose - an update
@@ -343,6 +347,7 @@ CODEX = Agent(
     label="Codex CLI",
     short="Codex",
     command="codex",
+    mark="\u25c6",
     tested=False,
     exit_hint="ending Codex closes the tab",
     resume_flags=("resume",),
@@ -397,6 +402,7 @@ ANTIGRAVITY = Agent(
     label="Antigravity CLI",
     short="Antigravity",
     command="agy",
+    mark="\u25b2",
     aliases=("antigravity",),   # what the cask and the product are called
     exit_hint="/exit in Antigravity closes the tab",
     resume_flags=("--conversation",),

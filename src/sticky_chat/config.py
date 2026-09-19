@@ -50,6 +50,25 @@ setw -g mode-keys vi
 # apart by weight, not by colour.
 set -g status-style "bg=default,fg=default"
 set -g window-status-current-style "bold"
+# Which agent is in each tab, one character after its name. The mark is a
+# window option rather than a pane one: a format in the status line is
+# resolved against whichever pane is active, and half of a sticky window is
+# the sidebar - a pane-level mark would come and go as focus moved. A tab
+# without one, which is any window sticky did not open, looks as it always
+# did.
+# Hard against the name, with no space: a mark floating between two tabs
+# belongs to neither of them to look at.
+# The mark is highlighted while a tab is waiting to be read: the agent
+# printed and then went quiet, which is the closest thing to "done" that
+# works for every agent, including one that rings no bell. Only the mark,
+# not the whole tab - tmux's own bell flag already reverses everything, and
+# two kinds of shouting in one status line is one too many.
+# A tab waiting for a limit to reset shows a clock instead of its agent's
+# mark: while that is what it is doing, it is the more useful of the two
+# things one character can say.
+set -g window-status-format "#I:#W#{?@sticky_waiting,⧗,#{?@sticky_mark,#{?@sticky_done,#[reverse]#{@sticky_mark}#[noreverse],#{@sticky_mark}},}}#F"
+set -g window-status-current-format "#I:#W#{?@sticky_waiting,⧗,#{?@sticky_mark,#{?@sticky_done,#[reverse]#{@sticky_mark}#[noreverse],#{@sticky_mark}},}}#F"
+
 set -g window-status-style "dim"
 set -g status-left "#[bold] sticky #[default] "
 set -g status-left-length 20
@@ -125,7 +144,16 @@ bind o run-shell -b '@BIN@ reopen --ask --socket "#{socket_path}" --client "#{cl
 set-hook -g window-pane-changed 'if -F "#{!=:#{window_panes},2}" { run-shell -b "@BIN@ sweep --quiet --socket \\"#{socket_path}\\"" }'
 set-hook -g client-resized 'run-shell -b "@BIN@ fit --socket \\"#{socket_path}\\""'
 set-hook -g client-attached 'run-shell -b "@BIN@ fit --socket \\"#{socket_path}\\""'
-set-hook -g after-select-window 'run-shell -b "@BIN@ fit --socket \\"#{socket_path}\\""'
+# `after-select-window` and `pane-focus-in` are set by `install_hooks`, not
+# here: arriving at a tab is what clears its "done" mark, and a server that
+# was already running when sticky arrived never sources this file.
+
+# `sticky` at the left of the status line is a way into the sidebar for a
+# hand already on the mouse: clicking it crosses to the other pane, and
+# clicking it again crosses back. `{next}` wraps in a two-pane window,
+# which is what makes it a toggle rather than a one-way trip - and a target
+# cannot be a format, so the partner cannot simply be named.
+bind -T root MouseDown1StatusLeft select-pane -t "{next}"
 
 # the wheel over the sidebar pages through the note history; everywhere else
 # this is tmux's own default binding
@@ -171,6 +199,13 @@ ACTIVITY_HOOK = (
 EXIT_HOOK = ('run-shell -b "{binary} sweep --quiet '
              '--socket \\"#{{socket_path}}\\""')
 
+# Arriving at a tab answers "has it finished", so the mark goes. Both
+# actions in one value rather than appended: `install_hooks` runs on every
+# start, and appending would grow the list a copy at a time.
+ARRIVE_HOOK = ('run-shell -b "{binary} fit --socket \\"#{{socket_path}}\\"" ; '
+               'set-option -w -u @sticky_done')
+FOCUS_HOOK = "set-option -w -u @sticky_done"
+
 
 def install_hooks(tm) -> bool:
     """Set the hooks the config file cannot carry, and say whether it took.
@@ -197,6 +232,9 @@ def install_hooks(tm) -> bool:
     # minute away.
     tm.ok("set-hook", "-g", "pane-exited",
           EXIT_HOOK.format(binary=self_path()))
+    tm.ok("set-hook", "-g", "after-select-window",
+          ARRIVE_HOOK.format(binary=self_path()))
+    tm.ok("set-hook", "-g", "pane-focus-in", FOCUS_HOOK)
     woken = tm.ok("set-hook", "-g", "pane-activity", ACTIVITY_HOOK)
     tm.ok("set-option", "-g", "@sticky_wake", "1" if woken else "0")
     return woken

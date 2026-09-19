@@ -126,6 +126,25 @@ Notes are taken there the same way, and then go to whichever tab should
 see them - press its number in the sidebar, the one tmux shows in the
 status line.
 
+An agent that runs out of turns says so and stops. Sticky reads the time it
+gave, waits until then plus a few minutes, and sends one word - `continue` -
+so a night's work is not lost to a limit that lifted at half past midnight.
+Three attempts at most: if three have not got past it, something is wrong
+that waiting will not fix. Ask the tab something yourself and the three
+start over - a tab that ran out last night should not spend the rest of
+its life one strike from the end. The tab shows `⧗` while it waits, the
+sidebar says `⧗ sending "continue" in 40 min` on a row of its own with the
+hour in the footer beneath it. Click that row to call it off - it stays
+there struck out, so you can see what it was going to do and click again to
+put it back - or `t` then `cancel` to be rid of it.
+
+The tab list at the bottom says which agent is in which tab, one character
+hard against the name: `✦` Claude Code, `◆` Codex, `✧` Gemini, `▲` Antigravity,
+`$` a shell, `•` anything else. The mark is highlighted while a tab is
+waiting to be read - it printed something and then went quiet, which is
+the only definition of "finished" that holds for every agent - and looking
+at the tab clears it.
+
 Nothing else you touch changes with the agent - the same keys, the same
 sidebar, the same send. What changes is only what the agent itself can be
 asked for:
@@ -232,6 +251,7 @@ Inside the sidebar the letters work on their own, without the prefix:
 | key | what it does |
 |---|---|
 | `s` `u` `F` | send, unmark, fork — as above |
+| `t` | send later: asks when, filled in with the reset time the agent printed; `cancel` calls one off |
 | `↑` `↓` or `k` `j` | move the cursor from note to note |
 | `PgUp` `PgDn` `Home` `End` | a screenful, the first note, the last |
 | `Enter` | edit the note under the cursor |
@@ -240,6 +260,7 @@ Inside the sidebar the letters work on their own, without the prefix:
 | `Esc` `g` `G` | drop the cursor, back to the live map |
 | `Tab` `>` `<` | next tab, next tab, previous tab |
 | wheel | page back through every note in this conversation |
+| click `sticky` | bottom left of the status line: cross to the sidebar, and click again to cross back |
 | `r` | re-read the notes file |
 | `?` or `h` | the help panel; any key goes back |
 | `q` | close the sidebar |
@@ -292,6 +313,7 @@ back the map is frozen, so nothing moves under you.
 | `sticky-chat` / `sticky-chat attach` | re-attach to what is running |
 | `sticky-chat list [--all]` | show pending notes, or all of them |
 | `sticky-chat commit [--no-paste] [--send] [--quiet]` | render, paste, mark sent |
+| `sticky-chat commit --at WHEN` | send later: `4h`, `90m`, `00:32`, `2026-09-16 00:32`, or `cancel` |
 | `sticky-chat uncommit [id…] [--all]` | mark sent notes pending again; default is the last batch |
 | `sticky-chat fork` | branch the conversation into a new tab |
 | `sticky-chat restore` | reopen a sidebar you closed |

@@ -224,12 +224,25 @@ life, because no hook can say "the transcript has been written now"; see
 
 | what changed | what tells it |
 |---|---|
-| Claude printed | `pane-activity` sends one `\0` byte to the pane beside it |
+| Claude printed | `pane-activity` sends one `\0` byte to the pane beside it, and the pass that follows compares the screen |
 | a note was written | `nudge` sends `SIGUSR1` to `@sticky_sidebar_pid` |
 | copy mode entered or left | `pane-mode-changed`, the same signal |
 | the room changed | `client-resized`, `after-select-window` → `cmd_fit`, which signals every sidebar it resizes |
 | Claude ended | `pane-exited` → `cmd_sweep` closes the sidebar outright |
 | you pressed a key | the key itself |
+
+A wake is a reason to go and look, and nothing more. tmux fires
+`pane-activity` for every byte an agent writes, and an agent redrawing
+its own input box writes a great many that leave the screen exactly as
+it was - measured against `next-3.8`, a script redrawing one identical
+line fired the hook as often as one printing new ones. Taken as output,
+each of those starts the `DONE_QUIET` clock, so a backgrounded tab marks
+itself finished, the next redraw clears the mark, the one after sets it
+again, and the mark stops meaning anything. So what `printed_at` follows
+is the text of the pane, compared against the last pass. It costs
+nothing: the capture had to be taken anyway to place the notes. It also
+makes the mark work where there is no `pane-activity` at all, since the
+poll compares the same way.
 
 `SIDEBAR_IDLE` (30 s) is the timeout on that `select` — not a heartbeat,
 nothing is expected to arrive on it, a seatbelt so that a wake which never
@@ -987,6 +1000,173 @@ and a moved column alike - the profile learns nothing, and the tab comes back
 on `resume --last` or `--continue` as it did before. Codex's flags were read
 back off `codex resume --help` on the same version and match what the profile
 carries.
+
+## Which agent is in which tab
+
+One character hard against the tab's name in the status line, from
+`Agent.mark` - no space, because a mark floating between two tabs belongs
+to neither of them to look at.
+Which agent rather than merely whether: with several profiles the useful
+question is usually which one is in tab 3.
+
+It is a *window* option, `@sticky_mark`, set where a tab is made. A pane
+option would have been the obvious place - `@sticky_agent` already is one -
+and would have come and gone as focus moved, because the status line
+resolves a format against whichever pane is active and half of a sticky
+window is the sidebar.
+
+A tab that printed and then went quiet for `DONE_QUIET` is waiting to be
+read, and its mark is highlighted until somebody arrives. The sidebar is
+what notices - it already hears every time the agent prints - and silence
+is the signal, so the select timeout is capped at the deadline or nothing
+would wake it to look. The tab being watched is never marked: there is
+nothing to tell somebody already reading it. A bell would have been the
+obvious signal and is not one, because ringing it is a thing each agent
+chooses.
+
+The clearing hooks are set by `install_hooks` rather than written into the
+config, for the same reason `pane-exited` is: a server that was already
+running when sticky arrived never sourced one. Both actions go in a single
+hook value rather than being appended, because `install_hooks` runs on
+every start and appending would grow the list a copy at a time.
+
+`window-status-format` keeps tmux's own `#F` on the end, so the current-tab
+`*` and the zoom `Z` still show, and a window sticky did not open has no
+`@sticky_mark` and looks exactly as it always did.
+
+## Sending a batch later
+
+`commit --at 4h` writes a deadline instead of pasting. An agent that has
+run out of turns until midnight is the case it exists for: write the notes
+while you are looking at the output, and let them go when it can answer.
+
+The deadline is a pane option, `@sticky_send_at`, holding a unix time and
+optionally the tab to send to - `1789504372:3`. A pane option rather than a
+sleeping process, because a process would not survive the sidebar being
+restarted and would outlive the tab if it did; and the sidebar is what
+watches it, being the only part of sticky awake between one keypress and
+the next. The select timeout is capped at the deadline, the same way it is
+for the settle and the quiet.
+
+`when_to_send` reads a wait (`90m`), a time of day (`00:32` or `8pm`), and
+a date and time (`2026-09-16 00:32`) for when an agent has said which day
+its limit resets. A meridiem is allowed on the clock because agents write
+times the way people do; it is rewritten to 24-hour before anything parses,
+so there is one parser rather than two that disagree. A bare time already
+past today means tomorrow, which is what somebody typing `00:32` at
+midnight means and never the opposite. Anything it cannot read is refused
+rather than guessed at.
+
+An agent that has run out arms its own clock. The moment a tab goes quiet
+is the moment to tell why it stopped - finished, or out of turns - because
+the notice is the last thing it printed, so the same `reset_time` runs
+there and, if it finds a time, sets the deadline to that plus
+`CONTINUE_GRACE`: a reset time is when an agent starts working again and
+not a moment before. What goes at the deadline is one word, typed rather
+than pasted, since an agent that folds a long paste into a placeholder
+would fold this too.
+
+A sidebar that has just started has no way of knowing whether the tab in
+front of it has been quiet for a second or since last night, so it begins
+as though the agent had just printed: the first quiet is examined like any
+other, and a notice already on screen is found there. That is what makes
+`reload` pick up an agent that ran out while nothing was running to notice
+it. Reattaching needs nothing of its own - a client leaving does not stop
+the sidebar, and arming has never needed anyone to be watching.
+
+`CONTINUE_TRIES` is three attempts at a wall rather than three attempts
+ever: a turn that ends without a limit notice, and that the clock did not
+ask for itself, hands the three back. The distinction is worth the flag it
+costs, because the alternative is a tab that ran out once spending the
+rest of its life one strike from the end.
+
+Neither half of that can be read off the screen alone. An agent that gets
+past its limit leaves the old notice sitting above the answer, well inside
+the `RESET_ROWS` the scan looks at, so the notice last acted on is
+remembered and the same one is never acted on twice - otherwise a tab that
+recovered at midnight would set a clock for the following midnight. The
+count is counted in a pane option so that a sidebar restarted by `reload`
+does not hand out three more. It is the only part of
+sticky that acts on an agent's behalf without being asked, which is why it
+is bounded, why the tab shows `⧗` the whole time it is waiting, and why the
+footer says the hour: it should never be possible to wonder whether
+something is about to happen.
+
+The deadline is the same option a hand-set timer uses, with a third field
+for what to say - `<when>:<tab>:<what>` - so both kinds share one clock, one
+footer and one way of being called off.
+
+A clock is read at two different moments and wants two different answers.
+Now, the question is how long: that gets a row of its own, naming what is
+going - `⧗ sending "continue" in 40 min` - because a tab that sends
+something while nobody is looking is the one thing in here that should
+never arrive as a surprise, and because the footer is a row of
+abbreviations, which is the wrong register for it. At four in the morning
+the question is the hour instead, and that stays in the footer, written
+`⧗ at 00:10`: without the `at` it is four digits and a colon beside an
+hourglass, which is the shape of a stopwatch and gets read as how long the
+tab has been idle - a question the sidebar does not answer.
+
+The scan is deliberately short-sighted, and both halves of that were
+bought with a false positive. `RESET_ROWS` is ten rows up from the last row
+with anything on it, because a notice is the last thing an agent says
+before it stops: all the window has to clear is the agent's own furniture
+below it, measured at six rows for codex and six for Claude Code's input
+box. Anything further up is something the pane is talking about rather than
+something it is doing - and a tab in this very repository armed itself off
+a line of `docs/DEV.md` describing this paragraph.
+
+`LIMIT_SAID` wants the phrase and not the word for the same reason. The
+line that armed a tab here was
+`gh run list --limit 40 --jq '.createdAt[5:16]'`: a limit, and two numbers
+with a colon between them, read as an agent asking to be resumed at twenty
+past five. A shell is full of lines like it, so what is asked for is the
+kind of limit said in front of the word - `usage`, `rate`, `weekly`,
+`daily`, `5-hour` - or the word and then what it did, `resets` or
+`reached`, with whatever punctuation the vendor put between them.
+
+Every part of that was paid for by a notice that went unread:
+
+    You've hit your weekly limit · resets Sep 19 at 4am (Europe/Berlin)
+
+`weekly limit` was not a phrase it knew, the separator was a `·` rather
+than a space, the date came with no year, and there was an `at` between the
+date and the hour. A missing year is taken as the coming one, which is this
+year unless that has gone by more than three hundred days - across a new
+year `Jan 1` means next year, while a `Jan 2` read in September is a stale
+notice and not a clock to keep a tab on until the following winter. The
+timezone in the brackets is ignored: it is the agent printing the reader's
+own, so local is what it means. None of
+this can tell a notice from an agent quoting one, which is a thing that
+only happens while working on sticky itself; the row it read is kept in
+`@sticky_continue_saw` so that the next inexplicable clock can be asked
+what it saw instead of guessed at.
+
+The row is also the button. A click on it moves the deadline to
+`@sticky_send_at_off`, which nothing reads but the row that draws itself
+struck out, and a second click moves it back - parked rather than thrown
+away, because a clock you have turned off is one you may well want back and
+the hour it was set for is not a thing anybody should have to remember. It
+reaches `cmd_click` through the same hit list the notes use, under an id no
+note can have. Off has to mean off, so the arming scan is skipped entirely
+while a tab is stood down: it reads a pane when it goes quiet, and would
+otherwise find the same notice a minute later and start the whole thing
+again behind your back.
+
+`t` in the sidebar asks, rather than making you leave the tab for a shell.
+The prompt opens filled in with whatever the pane says about its own limit:
+`reset_time` takes the last rows that have anything on them and wants the
+word "limit" and a clock after it on one row - a colon or a meridiem, since
+`resets 8` could be an hour or the eighth of something. It reads the pane
+joined and with a little history, because the longest of those notices is
+wider than a pane with a sidebar beside it and opening the sidebar reflows
+what was printed before it.
+
+Getting that wrong costs nothing, which is the whole reason it is allowed
+to guess: the answer is a default in a prompt you can edit. A vendor that
+rewords its message leaves the scan empty-handed, the prompt opens blank,
+and you type the time. Nothing is ever sent on a guessed time without
+somebody having seen it and pressed Enter.
 
 ## Sending a batch somewhere else
 

@@ -10,25 +10,29 @@ import sys
 import time
 
 from .agents import CLAUDE, Agent, discover_session
-from .placement import VIEW_FORMAT, parse_view, placements
+from .placement import VIEW_FORMAT, pane_view, parse_view, resolve
 from .store import agent_of, open_store, record_window, resolve_project
 from .tmux import Tmux
 from .util import (
+    CLOCK_HIT,
     BOLD,
     COL_COMMITTED,
     COL_FOOTER,
     COL_PENDING,
     DIM,
     RESET,
+    RESET_ROWS,
     REVERSE,
     STATUS_COLOR,
     STRIKE,
     die,
     read_key,
+    reset_notice,
     self_path,
     terminal_size,
     truncate,
     visible,
+    when_to_send,
     wrap,
 )
 
@@ -61,6 +65,27 @@ SIDEBAR_SETTLE = 0.3        # one more pass after output or a scroll settles
 DISCOVER_EVERY = 5.0
 
 DISCOVER_WINDOW = 60.0
+
+
+# How long an agent has to stay quiet before its tab is called done. Every
+# agent prints in bursts and pauses inside a turn - reading a file, running
+# a command - so this is longer than any of those and shorter than anyone's
+# patience. It is the only definition of "finished" that works for all of
+# them: a bell is a thing an agent may or may not choose to ring.
+DONE_QUIET = 2.5
+
+
+# An agent that has run out of turns says so and stops. Sticky can put the
+# asking back on a clock: wait until the limit resets, plus a few minutes
+# because a reset time is when it starts working and not a moment before,
+# then send one word. Three times and no more - if three attempts have not
+# got past it, something is wrong that waiting will not fix, and an agent
+# left poking a wall all night is worse than one that stopped.
+CONTINUE_GRACE = 240.0
+
+CONTINUE_TRIES = 3
+
+CONTINUE_WORD = "continue"
 
 
 # ------------------------------------------------------------------ drawing
@@ -112,6 +137,7 @@ def help_sections(agent: Agent = CLAUDE) -> list[tuple[str, list[str]]]:
             "s send \u00b7 S send now \u00b7 u unmark",
             "r reload \u00b7 q close \u00b7 ? this page",
             "Selecting copies \u00b7 y copies again",
+            "Click \u2018sticky\u2019 to cross panes",
         ]),
         (f"Send to {agent.short}", [
             "C-g s pastes the pending notes",
@@ -120,6 +146,9 @@ def help_sections(agent: Agent = CLAUDE) -> list[tuple[str, list[str]]]:
             "  alt-enter sends and enters",
             "C-g u unmarks the last batch",
             "1-9 send to that tab instead",
+            "t sends later: it asks when",
+            "Click the clock row to call it",
+            "  off, and again to put it back",
         ]),
         ("Keyboard", [
             "Arrows/kj pick \u00b7 PgUp/Dn faster",
@@ -153,7 +182,8 @@ HELP_SECTIONS = help_sections()        # the default profile's, for callers
 
 
 def footer_text(placed: list[dict], listed: int = 0,
-                below: int | None = None) -> str:
+                below: int | None = None, due: float = 0.0,
+                saying: str = "") -> str:
     """The bottom line: what is pending, and what is off screen either way.
 
     How much Claude has printed while you read is *not* here - it is on the
@@ -166,6 +196,19 @@ def footer_text(placed: list[dict], listed: int = 0,
         below = sum(1 for p in placed if p["row"] is None
                     and p.get("where") == "below")
     parts = [f"{pending} pending"]
+    if due:
+        # The one thing here that is about the future rather than the
+        # screen, and worth the room: a batch waiting on a clock is easy to
+        # forget having set. A clock rather than an arrow when it is the
+        # agent being restarted rather than notes being sent.
+        #
+        # `at`, because without it this is two digits, a colon and two more
+        # digits next to an hourglass, which is the shape of a stopwatch:
+        # read as how long the tab has been idle rather than when something
+        # is going to happen to it.
+        sign = "\u29d7" if saying else "\u21b3"      # a clock, or an arrow
+        parts.append(f"{sign} at "
+                     f"{time.strftime('%H:%M', time.localtime(due))}")
     if listed:
         parts.append(f"\u2191{listed} above")
     if below:
@@ -174,6 +217,48 @@ def footer_text(placed: list[dict], listed: int = 0,
         parts.append("u unmark")
     parts.append("? help")
     return "  ".join(parts)
+
+
+def how_long(seconds: float) -> str:
+    """A wait, the way somebody waiting would say it.
+
+    Rounded up rather than down: a clock that says one minute and fires in
+    ninety seconds has told the truth late, and the number here is read by
+    somebody deciding whether to wait for it or go to bed.
+    """
+    minutes = max(0, int(seconds + 59) // 60)
+    if minutes < 1:
+        return "in under a minute"
+    if minutes < 60:
+        return f"in {minutes} min"
+    hours, minutes = divmod(minutes, 60)
+    return f"in {hours}h" if not minutes else f"in {hours}h {minutes}m"
+
+
+def due_line(due: float, saying: str, pending: int,
+             struck: bool = False) -> str:
+    """The prominent half of a clock: what is going, and how long until it.
+
+    The footer has the hour, which is the part worth having at four in the
+    morning; this is the part worth having now. Kept as its own row because
+    a tab sending something on its own while nobody is looking is the one
+    thing in here that should never come as a surprise - and because the
+    footer is a row of abbreviations, which is the wrong register for it.
+    """
+    if not due:
+        return ""
+    left = how_long(due - time.time())
+    if saying:
+        said = f"\u29d7 sending \u201c{saying}\u201d {left}"
+    else:
+        notes = "note" if pending == 1 else "notes"
+        said = f"\u21b3 sending {pending} {notes} {left}"
+    if not struck:
+        return said
+    # Struck out rather than gone: what it was going to do and when is what
+    # you want in front of you while deciding whether to let it, and a row
+    # that vanishes when clicked leaves nothing to click a second time.
+    return f"{STRIKE}{said}{RESET}{COL_FOOTER} off"
 
 
 def build_help(width: int, height: int,
@@ -341,7 +426,8 @@ def foot_lines(beneath: list[dict], width: int, foot_h: int,
 def build_frame(placed: list[dict], width: int, height: int,
                 scroll: int = 0, hits: list | None = None,
                 top: int = 0, hint: str | None = None,
-                cursor: str | None = None) -> list[str]:
+                cursor: str | None = None, due: float = 0.0,
+                saying: str = "", struck: bool = False) -> list[str]:
     """One rendered line per sidebar row, aligned with the Claude pane.
 
     A note keeps the row its text is on, so the aligned part is drawn in
@@ -350,7 +436,10 @@ def build_frame(placed: list[dict], width: int, height: int,
     than the client - and the band and its sizing follow it, so the list of
     what is above stays at the top of the *screen*.
     """
-    body_h = max(1, height - (2 if hint else 1))
+    pending = sum(1 for p in placed if p["note"]["status"] == "pending"
+                  and not p["note"].get("deleted"))
+    coming = due_line(due, saying, pending, struck)
+    body_h = max(1, height - (2 if hint else 1) - (1 if coming else 0))
     text_w = width - 2
     top = max(0, min(top, body_h - 1))
     view_h = body_h - top
@@ -491,12 +580,21 @@ def build_frame(placed: list[dict], width: int, height: int,
             claimed[map_h + index] = True
 
     frame = [line if line else "" for line in grid]
+    if coming:
+        if hits is not None:
+            # Not a note, so it carries an id no note can have. The whole
+            # row is the button: there is one thing on it and one thing it
+            # does, and a target the width of the pane is easier to hit
+            # than a bracket at the end of it.
+            hits.append({"row": len(frame), "id": CLOCK_HIT,
+                         "x": 0, "onscreen": True})
+        frame.append(f"{COL_PENDING}{truncate(coming, width)}{RESET}")
     if hint:
         frame.append(f"{COL_FOOTER}{truncate(hint, width)}{RESET}")
     # What the band below actually holds, which is not what `placed` says:
     # a note whose row the band took is listed there too.
     frame.append(f"{COL_FOOTER}"
-                 f"{truncate(footer_text(placed, listed, len(beneath)), width)}"
+                 f"{truncate(footer_text(placed, listed, len(beneath), due, saying), width)}"
                  f"{RESET}")
     return frame
 
@@ -531,6 +629,10 @@ def cmd_sidebar(args) -> int:
     self_pane = os.environ.get("TMUX_PANE")
     session_id = tm.option(pane, "@sticky_session")
     agent = agent_of(tm, pane)         # whose output this pane is drawing
+    # The mark is set when a tab is made, so a tab older than this code has
+    # none. Setting it here too means `reload` is enough to bring one up to
+    # date, rather than closing tabs to get a stripe in the status line.
+    tm.ok("set-option", "-w", "-t", pane, "@sticky_mark", agent.mark)
     touched = 0.0
 
     # Which conversation the agent chose for itself, where choosing it was
@@ -563,6 +665,14 @@ def cmd_sidebar(args) -> int:
     idle = (SIDEBAR_IDLE
             if tm.run("show-options", "-gqv", "@sticky_wake").strip() == "1"
             else SIDEBAR_TICK)
+
+    def run(*command):
+        """Another sticky command, against this tab. Defined once: the keys
+        reach for it, and so does the clock."""
+        subprocess.run([self_path(), *command,
+                        "--pane", pane, "--project", project,
+                        "--socket", tm.socket],
+                       capture_output=True, text=True)
 
     raw_mode = sys.stdin.isatty()
     old_attrs = None
@@ -610,6 +720,19 @@ def cmd_sidebar(args) -> int:
     fresh = 0                          # what Claude has printed since then
     said_fresh = -1                    # ... and what the status line was told
     last_placed = 0.0                  # when the notes were last put on rows
+    # Treated as though it had just printed, so the first quiet is looked
+    # at like any other: a tab whose notice was already on screen when this
+    # started - a reload, or an agent that ran out before the sidebar was
+    # open - would otherwise never be examined at all.
+    printed_at = time.monotonic()      # when the agent last said anything
+    last_screen = None                 # ... and what it looked like then
+    settled = False                    # ... and whether any of it was news
+    said_done = False                  # ... and whether its tab has been told
+    # Counted on the pane, so a sidebar restarted by `reload` does not hand
+    # an agent three more attempts than it was given.
+    tries = int(tm.option(pane, "@sticky_continue_tries") or 0)
+    armed_on = ""                      # the notice those attempts were for
+    ours = False                       # whether this turn is the clock's own
     last_pass = 0.0                    # when a full pass last cost tmux calls
     replace = True                     # ... and whether that is due again
 
@@ -629,17 +752,37 @@ def cmd_sidebar(args) -> int:
                     # its own to ask, and a round trip is nearly all of what
                     # a tmux call costs.
                     alive, raw, view = tm.formats(
-                        (pane, "#{pane_id}\t#{pane_in_mode}"),
+                        (pane, "#{pane_id}\t#{pane_in_mode}\t#{window_active}"
+                         "\t#{@sticky_send_at}\t#{@sticky_send_at_off}"),
                         (self_pane, "#{pane_in_mode}\t#{window_offset_y}"),
                         (pane, VIEW_FORMAT))
                     mode, _, offset = raw.partition("\t")
                     top = int(offset) if offset.isdigit() else 0
                 else:
-                    alive, view = tm.formats((pane, "#{pane_id}\t#{pane_in_mode}"),
-                                             (pane, VIEW_FORMAT))
+                    alive, view = tm.formats(
+                        (pane, "#{pane_id}\t#{pane_in_mode}\t#{window_active}"
+                         "\t#{@sticky_send_at}\t#{@sticky_send_at_off}"),
+                        (pane, VIEW_FORMAT))
             except RuntimeError:
                 break              # before 3.8, asking about a gone pane errors
             alive, _, reading = alive.partition("\t")
+            reading, _, looking = reading.partition("\t")
+            looking, _, due = looking.partition("\t")
+            due, _, stood = due.partition("\t")
+            # `<when>:<tab>:<what>`. With nothing to say it is the pending
+            # notes that go; with a word, that word - the two want the same
+            # clock, the same footer and the same way of being called off.
+            #
+            # Stood down, the very same value moves to `@sticky_send_at_off`
+            # and nothing reads it but the row that draws it struck out.
+            # Kept rather than thrown away because a clock you turned off is
+            # one you may well want back, and the time it was set for is not
+            # something you should have to remember.
+            struck = not due.strip() and bool(stood.strip())
+            at, _, rest = (stood if struck else due).strip().partition(":")
+            to_tab, _, saying = rest.partition(":")
+            showing = float(at) if at.replace(".", "", 1).isdigit() else 0.0
+            deadline = 0.0 if struck else showing
             if alive.strip() != pane:
                 break
 
@@ -716,19 +859,60 @@ def cmd_sidebar(args) -> int:
             # it once more against the screen that has stopped moving.
             now = time.monotonic()
             due = replace or not placed or now - last_placed >= SIDEBAR_BUSY
-            if (scroll == 0 or not placed) and due:
+            if due:
                 try:
-                    placed = placements(tm, pane, notes, view)
+                    visible, top_abs, pane_h = pane_view(tm, pane, view)
                 except RuntimeError:
                     break
-                last_placed, replace = now, False
+                # What the pane says, rather than that something was
+                # written to it. tmux fires `pane-activity` for every byte
+                # an agent sends, and an agent redrawing its input box
+                # sends plenty that leave the screen exactly as it was -
+                # counting those as output marks a tab finished that never
+                # started. Comparing the text is the only way to tell,
+                # and it is free here: the capture had to be taken anyway.
+                screen = "\n".join(visible)
+                if screen != last_screen:
+                    # The first look is the baseline, not news. It still
+                    # starts the clock, because a limit notice already on
+                    # screen is the whole point of examining the first
+                    # quiet - but a tab that has sat there saying the same
+                    # thing since yesterday has not just said it, and
+                    # `reload` restarting every sidebar at once would
+                    # otherwise light up every tab in the list.
+                    if last_screen is not None:
+                        settled = True
+                        if said_done:
+                            # Talking again: whatever it was finished with,
+                            # it is not finished now.
+                            tm.ok("set-option", "-w", "-u", "-t", pane,
+                                  "@sticky_done")
+                            said_done = False
+                    last_screen = screen
+                    printed_at = now
+                if scroll == 0 or not placed:
+                    placed = resolve(visible, top_abs, pane_h, notes, pane)
+                    last_placed, replace = now, False
 
             show_help = (not notes) if help_mode is None else help_mode
             hits: list[dict] = []
             if show_help:
-                frame = [""] * top + build_help(width, height - top, agent)
+                # The clock goes on the help screen too. It is the one thing
+                # in here that acts while nobody is looking, so reading the
+                # keys should not be a way to stop hearing about it.
+                coming = due_line(showing, saying, sum(
+                    1 for p in placed if p["note"]["status"] == "pending"
+                    and not p["note"].get("deleted")), struck)
+                frame = ([""] * top
+                         + build_help(width, height - top - bool(coming),
+                                      agent))
+                if coming:
+                    hits.append({"row": len(frame), "id": CLOCK_HIT,
+                                 "x": 0, "onscreen": True})
+                    frame.append(
+                        f"{COL_PENDING}{truncate(coming, width)}{RESET}")
                 frame.append(f"{COL_FOOTER}"
-                             f"{truncate(footer_text(placed), width)}"
+                             f"{truncate(footer_text(placed, due=deadline, saying=saying), width)}"
                              f"{RESET}")
             else:
                 # Beginners need telling how to send; once nothing is
@@ -745,7 +929,8 @@ def cmd_sidebar(args) -> int:
                 for _ in range(len(order) + 2):
                     hits.clear()
                     frame = build_frame(placed, width, height, scroll, hits,
-                                        top, hint, cursor)
+                                        top, hint, cursor, showing, saying,
+                                        struck)
                     shown = [h["id"] for h in hits]
                     if cursor is None or cursor in shown or not shown:
                         break
@@ -766,6 +951,116 @@ def cmd_sidebar(args) -> int:
                     store.save_hits(self_pane, hits)
 
             now = last_pass = time.monotonic()
+
+            # Printed, then went quiet: the nearest thing to "finished" that
+            # holds for every agent, since a bell is a thing an agent may or
+            # may not ring. Not said of the tab being looked at - there is
+            # nothing to tell somebody who is already watching - and the
+            # window option is cleared by tmux the moment that tab is
+            # selected.
+            # Being on the tab only counts as watching it if you are
+            # watching the end of it. Scrolled back through the history you
+            # are reading something else, and what arrived while you were
+            # there is exactly what you would want the mark to tell you.
+            watching = looking.strip() == "1" and reading.strip() != "1"
+            if printed_at and now - printed_at >= DONE_QUIET:
+                # An agent stops for two reasons: it finished, or it ran out
+                # of turns. This is the moment to tell which, because the
+                # notice is the last thing it printed - and the answer is
+                # what makes the difference between a tab worth reading and
+                # one worth waiting on.
+                if not deadline and not struck:
+                    try:
+                        tall = int(tm.fmt(pane, "#{pane_height}") or 0)
+                        said, saw = reset_notice(
+                            tm.capture(pane, -RESET_ROWS, tall - 1,
+                                       joined=True))
+                    except (RuntimeError, ValueError):
+                        said, saw = "", ""
+                    # The same notice twice is one notice. An agent that got
+                    # past its limit leaves the old one on screen above the
+                    # answer, and a clock set off that would sit out a whole
+                    # day waiting for a limit that lifted hours ago.
+                    fresh = said if said and said != armed_on else ""
+                    when = when_to_send(fresh) if fresh else 0.0
+                    if when and tries < CONTINUE_TRIES:
+                        tries += 1
+                        armed_on = said
+                        deadline = when + CONTINUE_GRACE
+                        saying = CONTINUE_WORD
+                        # The clock goes on last. It is what everything
+                        # else keys off - the footer, the tab's mark, a
+                        # sidebar starting up - so by the time it is there
+                        # the count that belongs with it is there too.
+                        tm.ok("set-option", "-p", "-t", pane,
+                              "@sticky_continue_tries", str(tries))
+                        # The row it read this off. Nothing uses it; it is
+                        # here so that the next time a tab arms itself for
+                        # no reason anybody can see, the reason is on the
+                        # pane rather than three thousand rows up a
+                        # scrollback that has since been overwritten.
+                        tm.ok("set-option", "-p", "-t", pane,
+                              "@sticky_continue_saw", saw[:200])
+                        tm.ok("set-option", "-w", "-t", pane,
+                              "@sticky_waiting", "1")
+                        tm.ok("set-option", "-p", "-t", pane,
+                              "@sticky_send_at",
+                              f"{deadline:.0f}::{CONTINUE_WORD}")
+                        # The frame for this pass has already been drawn,
+                        # and the next one would otherwise be at the
+                        # deadline itself - hours of a footer that does not
+                        # mention the thing it is waiting for.
+                        last_sig = None
+                        settle_at = time.monotonic() + SIDEBAR_SETTLE
+                    elif not when:
+                        if ours:
+                            # The turn the clock itself asked for. That it
+                            # ended quietly is the clock working, and not
+                            # somebody coming back to the tab.
+                            ours = False
+                        elif tries:
+                            # Somebody's own turn ended here, so the agent
+                            # is in use again and the three start over.
+                            # Without this a tab that ran out once last
+                            # night spends the rest of its life one strike
+                            # from the end.
+                            tries, armed_on = 0, ""
+                            tm.ok("set-option", "-p", "-u", "-t", pane,
+                                  "@sticky_continue_tries")
+                            tm.ok("set-option", "-p", "-u", "-t", pane,
+                                  "@sticky_continue_saw")
+                if not said_done and not watching and settled:
+                    tm.ok("set-option", "-w", "-t", pane, "@sticky_done", "1")
+                    said_done = True
+                printed_at = 0.0
+            if said_done and watching:
+                # Come back to the end of it, and the question is answered.
+                # The hooks cannot see this one: no window was selected and
+                # no pane took focus - the scroll simply ended.
+                tm.ok("set-option", "-w", "-u", "-t", pane, "@sticky_done")
+                said_done = False
+
+            # A batch with a time on it. The clock is the sidebar's to
+            # watch because it is the only part of sticky that is awake
+            # between one keypress and the next.
+            if deadline and time.time() >= deadline:
+                tm.ok("set-option", "-p", "-u", "-t", pane, "@sticky_send_at")
+                tm.ok("set-option", "-w", "-u", "-t", pane, "@sticky_waiting")
+                if saying:
+                    # Typed rather than pasted: one word needs no buffer,
+                    # and an agent that folds a paste into a placeholder
+                    # would fold this too.
+                    tm.ok("send-keys", "-t", pane, "-l", saying)
+                    time.sleep(0.15)      # let the agent take the word in
+                    tm.ok("send-keys", "-t", pane, "Enter")
+                    ours = True           # the turn this starts is not a
+                    #                       person's, so it spends no strike
+                else:
+                    run("commit", "--send", "--quiet",
+                        *(("--to-tab", to_tab) if to_tab else ()))
+                last_mtime = -1.0
+                last_sig = None
+
             if session_id and now - touched > 60:
                 record_window(session_id)     # still open, as of now
                 touched = now
@@ -795,6 +1090,13 @@ def cmd_sidebar(args) -> int:
             timeout = idle
             if settle_at:
                 timeout = max(0.0, min(timeout, settle_at - now))
+            if printed_at:
+                # Nothing else would wake this: silence is the signal, so
+                # the clock has to be set for it.
+                timeout = max(0.0, min(timeout,
+                                       printed_at + DONE_QUIET - now))
+            if deadline:
+                timeout = max(0.0, min(timeout, deadline - time.time()))
             if hunting:
                 # The one thing here that is on a clock, and only while a
                 # tab is young and its id still unknown: nothing in tmux can
@@ -833,6 +1135,9 @@ def cmd_sidebar(args) -> int:
                         if byte != b"\x00":
                             stash = byte or None
                             break
+                    # Only a reason to go and look. Whether anything
+                    # actually changed is answered by the pass, against the
+                    # screen itself.
                     settle_at = time.monotonic() + SIDEBAR_SETTLE
                     if stash is None:
                         # Output and nothing else. Going round again would
@@ -865,12 +1170,6 @@ def cmd_sidebar(args) -> int:
                     help_mode = False
                     last_sig = None
                     continue
-
-                def run(*command):
-                    subprocess.run([self_path(), *command,
-                                    "--pane", pane, "--project", project,
-                                    "--socket", tm.socket],
-                                   capture_output=True, text=True)
 
                 order = [p["id"] for p in
                          sorted(placed,
@@ -949,6 +1248,10 @@ def cmd_sidebar(args) -> int:
                     run("commit")
                     last_mtime = -1.0
                     last_sig = None
+                if key == "t":            # t for the time it will go at
+                    # Opens a prompt and returns; what it asks for is set
+                    # from in there, and the footer says so when it is.
+                    run("commit", "--ask-at")
                 if key.isdigit() and key != "0":
                     # The numbers on the status line are the tabs, so they
                     # are the numbers to press: 2 hands what is pending to

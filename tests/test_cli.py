@@ -531,6 +531,43 @@ class TestTheDependencyPackagingCannotDeclare:
         assert "brew install tmux" in said and "apt install tmux" in said
 
 
+class TestTheTabListSaysWhichAgent:
+    """One character after the tab's name, so a glance answers it.
+
+    Which agent, not merely whether: with several profiles the useful
+    question is usually which one is in tab 3.
+    """
+
+    def test_every_profile_has_one(self, sticky):
+        for name, agent in sticky.AGENTS.items():
+            assert agent.mark, f"{name} has no mark"
+            assert sticky.cell_width(agent.mark) == 1, \
+                f"{name}'s mark is {sticky.cell_width(agent.mark)} columns"
+
+    def test_they_are_distinct(self, sticky):
+        marks = [a.mark for a in sticky.AGENTS.values()]
+        assert len(set(marks)) == len(marks), f"two profiles share one: {marks}"
+
+    def test_an_unnamed_agent_still_gets_something(self, sticky):
+        """The default is on the field, so a profile added without thinking
+        about the tab list still shows up in it."""
+        import dataclasses
+        quiet = dataclasses.replace(sticky.GENERIC, name="whatever")
+        assert quiet.mark == sticky.GENERIC.mark
+        assert dataclasses.fields(sticky.Agent)
+        made = sticky.Agent(name="x", label="x", short="x", command="x")
+        assert made.mark, "the field's default is what saves a new profile"
+
+    def test_the_status_line_reads_it_off_the_window(self, sticky):
+        """A pane option would come and go: the status line resolves a
+        format against whichever pane is active, and half of a sticky
+        window is the sidebar."""
+        config = sticky.CONFIG_TEMPLATE
+        assert "window-status-format" in config
+        assert "@sticky_mark" in config
+        assert "#F" in config, "tmux's own flags stay on the end"
+
+
 class TestSendingToAnotherTab:
     """Notes are taken where the output is and belong where the agent is.
 

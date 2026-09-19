@@ -342,6 +342,270 @@ class TestLayingOutTheLine:
         assert rows == [""] and where == [(0, 0)]
 
 
+class TestReadingATimeToSendAt:
+    """Three shapes, because three are what anybody types.
+
+    The one that needed deciding is a bare time of day that has already
+    passed: `00:32` typed at midnight means tonight's 00:32 if it is still
+    to come and tomorrow's if it is not, and never yesterday's.
+    """
+
+    NOW = None      # set in setup, a fixed Tuesday 22:00
+
+    def setup_method(self):
+        import time
+        self.NOW = time.mktime((2026, 9, 15, 22, 0, 0, 0, 0, -1))
+
+    def said(self, sticky, text):
+        import time
+        when = sticky.when_to_send(text, self.NOW)
+        return time.strftime("%d %H:%M", time.localtime(when)) if when else ""
+
+    def test_a_wait(self, sticky):
+        assert self.said(sticky, "4h") == "16 02:00"
+        assert self.said(sticky, "90m") == "15 23:30"
+        assert self.said(sticky, "30s") == "15 22:00"
+        assert self.said(sticky, "+2h") == "16 00:00", "a leading + is allowed"
+
+    def test_a_time_still_to_come_today(self, sticky):
+        assert self.said(sticky, "23:15") == "15 23:15"
+
+    def test_a_time_already_past_means_tomorrow(self, sticky):
+        assert self.said(sticky, "09:00") == "16 09:00"
+        assert self.said(sticky, "00:32") == "16 00:32"
+
+    def test_a_date_and_time_is_taken_exactly(self, sticky):
+        """What an agent says when it tells you which day its limit
+        resets."""
+        assert self.said(sticky, "2026-09-16 00:32") == "16 00:32"
+        assert self.said(sticky, "2026-09-16T00:32") == "16 00:32"
+
+    def test_a_clock_may_wear_an_am_or_a_pm(self, sticky):
+        """Agents write times the way people do, and what one printed is
+        what gets typed back."""
+        assert self.said(sticky, "8pm") == "16 20:00"
+        assert self.said(sticky, "3:00 PM") == "16 15:00"
+        assert self.said(sticky, "12:32 AM") == "16 00:32"
+        assert self.said(sticky, "8 p.m.") == "16 20:00"
+        assert self.said(sticky, "12pm") == "16 12:00", "noon, not midnight"
+        assert self.said(sticky, "12am") == "16 00:00", "and midnight"
+
+    def test_a_date_can_wear_one_too(self, sticky):
+        """The whole of what an agent prints when it says which day."""
+        assert self.said(sticky, "2026-09-16 12:32 AM") == "16 00:32"
+
+    def test_a_wait_is_not_read_as_a_meridiem(self, sticky):
+        assert self.said(sticky, "30m") == "15 22:30", "m is minutes"
+        assert self.said(sticky, "4h") == "16 02:00"
+
+    def test_nonsense_is_refused_rather_than_guessed(self, sticky):
+        for text in ("half past", "", "   ", "25:00", "12:99", "soon",
+                     "13pm", "0am", "pm"):
+            assert sticky.when_to_send(text, self.NOW) == 0.0, text
+
+
+class TestGuessingWhenTheAgentGetsItsTurnsBack:
+    """The scan behind the `t` key's pre-filled prompt.
+
+    Three wordings, all of them real. What comes out is what goes back into
+    `when_to_send`, and nothing at all when the pane says nothing: the guess
+    is a default in a prompt you can edit, so finding none costs a typed
+    time and never a wrong send.
+    """
+
+    NOW = None      # the same fixed Tuesday 22:00
+
+    def setup_method(self):
+        import time
+        self.NOW = time.mktime((2026, 9, 15, 22, 0, 0, 0, 0, -1))
+
+    def test_a_date_and_a_time(self, sticky):
+        rows = ["> what does this do?", "",
+                "You've hit your usage limit. You can try again at "
+                "Sep 16th, 2026 12:32 AM."]
+        assert sticky.reset_time(rows, self.NOW) == "2026-09-16 00:32"
+
+    def test_a_time_of_day(self, sticky):
+        assert sticky.reset_time(["Your limit resets at 3:00 PM."],
+                                 self.NOW) == "15:00"
+
+    def test_a_time_with_no_minutes(self, sticky):
+        assert sticky.reset_time(["5-hour limit reached ∙ resets 8pm"],
+                                 self.NOW) == "20:00"
+
+    def test_a_pane_with_no_time_in_it_offers_nothing(self, sticky):
+        rows = ["  2 files changed, 41 insertions(+)",
+                "All 276 tests pass.", "", "> "]
+        assert sticky.reset_time(rows, self.NOW) == ""
+
+    def test_a_clock_without_the_word_is_not_one(self, sticky):
+        """A pane full of timestamps is the ordinary case, not a notice."""
+        assert sticky.reset_time(["git reset --hard  # 12:30 yesterday"],
+                                 self.NOW) == ""
+
+    def test_the_bare_word_is_not_the_notice(self, sticky):
+        """This one really happened, in the tab this was written in.
+
+        `--limit 40` has the word, `[5:16]` has two numbers and a colon
+        between them, and the tab armed itself to say "continue" at twenty
+        past five. A shell is full of lines like it. What the real notices
+        share is the phrase, not the word.
+        """
+        assert sticky.reset_time(
+            ["gh run list --limit 40 --json createdAt "
+             "--jq '.[] | \"\\(.createdAt[5:16])\"'"], self.NOW) == ""
+        assert sticky.reset_time(["  --limit 20  # ran at 9:30 PM"],
+                                 self.NOW) == ""
+
+    def test_it_keeps_the_row_it_read(self, sticky):
+        """So that a tab that armed itself for no visible reason can be
+        asked what it saw, rather than the answer being three thousand rows
+        up a scrollback that has since been overwritten."""
+        said, saw = sticky.reset_notice(
+            ["working away", "Your limit resets at 3:00 PM.", "> "], self.NOW)
+        assert said == "15:00"
+        assert saw == "Your limit resets at 3:00 PM."
+        assert sticky.reset_notice(["nothing here"], self.NOW) == ("", "")
+
+    def test_the_blank_bottom_of_a_roomy_pane_is_not_output(self, sticky):
+        """A pane with room to spare ends in blank rows, and counting the
+        window from the bottom of the screen would look straight past what
+        is written at the top of it."""
+        rows = ["Your limit resets at 3:00 PM."] + [""] * 30
+        assert sticky.reset_time(rows, self.NOW) == "15:00"
+
+    def test_a_notice_scrolled_well_up_is_left_alone(self, sticky):
+        rows = (["Your limit resets at 3:00 PM."]
+                + [f"  work {n}" for n in range(sticky.RESET_ROWS + 1)])
+        assert sticky.reset_time(rows, self.NOW) == ""
+
+    def test_the_newest_notice_wins(self, sticky):
+        rows = ["Your limit resets at 3:00 PM.",
+                "...", "Your limit resets at 11:30 PM."]
+        assert sticky.reset_time(rows, self.NOW) == "23:30"
+
+    def test_a_notice_from_yesterday_is_not_a_guess(self, sticky):
+        """Only a dated one can land in the past - and a deadline already
+        gone would fire the instant it was set."""
+        assert sticky.reset_time(
+            ["usage limit reached, try again at Sep 14th, 2026 12:32 AM"],
+            self.NOW) == ""
+
+    def test_the_wording_claude_code_actually_prints(self, sticky):
+        """Two real notices that went unread, and three reasons why.
+
+        `weekly limit` was not a phrase it knew, the separator was a `·`
+        rather than a space, and the date arrived with no year and an `at`
+        between it and the hour.
+        """
+        assert sticky.reset_time(
+            ["You've hit your weekly limit \u00b7 resets Sep 16 at 4am "
+             "(Europe/Berlin)"], self.NOW) == "2026-09-16 04:00"
+        assert sticky.reset_time(
+            ["You've hit your weekly limit \u00b7 resets 4am "
+             "(Europe/Berlin)"], self.NOW) == "04:00"
+
+    def test_a_day_with_no_year_is_the_coming_one(self, sticky):
+        """Claude Code prints no year, so one has to be worked out - and
+        the wrong one parks a tab on a clock until next autumn."""
+        import time
+        eve = time.mktime((2026, 12, 31, 23, 30, 0, 0, 0, -1))
+        assert sticky.reset_time(
+            ["weekly limit \u00b7 resets Jan 1 at 4am"], eve) \
+            == "2027-01-01 04:00", "over a new year, next year"
+        assert sticky.reset_time(
+            ["weekly limit \u00b7 resets Jan 2 at 4am"], self.NOW) == "", \
+            "but a day months behind is a stale notice, not next year's"
+
+    def test_a_notice_above_the_box_is_still_reached(self, sticky):
+        """The rows an agent keeps below its own output are what the window
+        has to clear, and Claude Code keeps more of them than codex: a
+        two-line notice, the "done" line, an input box and the hints under
+        it put a real notice at about twelve rows up."""
+        pane = ["  \u255a  You've hit your weekly limit \u00b7 resets "
+                "Sep 16 at 4am (Europe/Berlin)",
+                "     /usage-credits to finish what you\u2019re working on.",
+                "",
+                "\u273b Cogitated for 36s \u00b7 done 12:14 AM",
+                "",
+                "\u2500" * 60, "\u276f", "\u2500" * 60,
+                "\u23f5\u23f5 bypass permissions on \u00b7 \u2190 1 agent",
+                "new task? /clear to save 932.4k tokens",
+                "/rc"]
+        assert sticky.reset_time(pane, self.NOW) == "2026-09-16 04:00"
+
+    def test_what_comes_out_goes_back_in(self, sticky):
+        for row in ("Your limit resets at 3:00 PM.",
+                    "5-hour limit reached ∙ resets 8pm",
+                    "hit your usage limit, back Sep 16th, 2026 12:32 AM",
+                    "You've hit your weekly limit · resets Sep 16 at 4am"):
+            guess = sticky.reset_time([row], self.NOW)
+            assert guess and sticky.when_to_send(guess, self.NOW), row
+
+
+class TestTheFooterSaysWhenABatchIsDue:
+    def test_a_time_is_shown_when_one_is_set(self, sticky):
+        import time
+        note = {"note": {"status": "pending"}, "row": 1}
+        assert "\u21b3" not in sticky.footer_text([note])
+        soon = time.time() + 3600
+        said = sticky.footer_text([note], due=soon)
+        assert time.strftime("%H:%M", time.localtime(soon)) in said
+        assert "pending" in said, "and what is waiting is still said first"
+
+    def test_the_hour_says_it_is_an_hour(self, sticky):
+        """Four digits and a colon beside an hourglass is a stopwatch.
+
+        Read as how long the tab has been idle, which is a question the
+        sidebar never answers, rather than when something is going to
+        happen to it - so the hour has to say which of the two it is.
+        """
+        import time
+        note = {"note": {"status": "pending"}, "row": 1}
+        said = sticky.footer_text([note], due=time.time() + 600,
+                                  saying="continue")
+        assert "at " in said, f"a clock, not a duration: {said!r}"
+
+
+class TestTheSidebarSaysWhatIsAboutToHappen:
+    """The countdown, which is the half of a clock that is read now.
+
+    The hour is the half that is read at four in the morning. Both are
+    wanted, and neither does the other's job: `at 00:03` does not say
+    whether that is in a minute or tomorrow, and `in 7h` does not survive
+    being looked at an hour later.
+    """
+
+    def test_a_wait_is_said_the_way_it_is_waited(self, sticky):
+        assert sticky.how_long(0) == "in under a minute"
+        assert sticky.how_long(90) == "in 2 min", "rounded up, never short"
+        assert sticky.how_long(7200) == "in 2h"
+        assert sticky.how_long(3600 * 7 + 40 * 60) == "in 7h 40m"
+
+    def test_it_names_what_is_going(self, sticky):
+        import time
+        soon = time.time() + 2520
+        assert "continue" in sticky.due_line(soon, "continue", 0)
+        assert "3 notes" in sticky.due_line(soon, "", 3)
+        assert "1 note " in sticky.due_line(soon, "", 1), "not 1 notes"
+        assert not sticky.due_line(0.0, "continue", 0), "nothing due, nothing said"
+
+    def test_it_takes_a_row_of_its_own(self, sticky):
+        """Prominent means a row, not a corner of the abbreviations.
+
+        A tab that sends something while nobody is looking is the one
+        thing in here that should never arrive as a surprise.
+        """
+        import time
+        note = placed(1, "a", "who is nome?")
+        plain = sticky.build_frame([note], 34, 20)
+        armed = sticky.build_frame([note], 34, 20,
+                                   due=time.time() + 2520, saying="continue")
+        assert len(plain) == len(armed), "the frame is still the pane's height"
+        assert any("continue" in line for line in armed)
+        assert not any("continue" in line for line in plain)
+
+
 class TestUpAndDownInTheNotePrompt:
     """A note long enough to wrap gets rows, so up and down should cross them.
 

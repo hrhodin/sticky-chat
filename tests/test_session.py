@@ -329,6 +329,518 @@ def test_a_named_profile_is_not_overruled_by_the_tab_it_came_from(
     assert launched(shell).endswith("sh"), f"a shell, not {launched(shell)!r}"
 
 
+def test_a_batch_can_be_sent_on_a_timer(
+        tmux, server, run_sticky, project, close_windows):
+    """An agent that has run out of turns until midnight is the case: write
+    the notes now, and let them go when it can answer.
+
+    The sidebar watches the clock, being the only part of sticky awake
+    between one keypress and the next, so the deadline is a pane option
+    rather than a sleeping process - it survives the sidebar restarting and
+    dies with the tab.
+    """
+    pane = run_sticky("start", project, "--detach", "--agent", "generic",
+                      "--agent-cmd", "cat").strip()
+    close_windows.append(pane)
+    time.sleep(0.8)
+    run_sticky("add", "--pane", pane, "--note", "later, please",
+               "--text", "some output")
+    time.sleep(0.5)
+
+    run_sticky("commit", "--at", "4s", "--pane", pane)
+    assert tmux("show-options", "-pqv", "-t", pane,
+                "@sticky_send_at").strip(), "the deadline is written down"
+
+    deadline = time.time() + 12
+    while time.time() < deadline:
+        if not tmux("show-options", "-pqv", "-t", pane,
+                    "@sticky_send_at").strip():
+            break
+        time.sleep(0.1)
+    else:
+        pytest.fail("the timer never fired")
+
+    time.sleep(1.0)
+    seen = tmux("capture-pane", "-p", "-t", pane)
+    assert "later, please" in seen, "and the batch arrived in the pane"
+
+
+def test_an_agent_out_of_turns_arms_itself(
+        tmux, server, run_sticky, project, close_windows):
+    """The message that says "try again at" is the moment to set a clock.
+
+    The agent prints the notice and stops, which is the same silence that
+    means "finished" - so the difference is told by what it printed, and
+    only then. The tab shows a clock instead of its mark while it waits.
+    """
+    agent = Path(project) / "out-of-turns"
+    agent.write_text("#!/bin/sh\nwhile read -r line; do\n"
+                     "  printf \"You've hit your usage limit. "
+                     "Try again at 11:59 PM.\\n\"\ndone\n")
+    agent.chmod(0o755)
+    pane = run_sticky("start", project, "--detach", "--agent", "generic",
+                      "--agent-cmd", str(agent)).strip()
+    close_windows.append(pane)
+    time.sleep(0.8)
+    tmux("send-keys", "-t", pane, "a question", "Enter")
+
+    # Generous, because the whole suite shares one server and the sidebar
+    # walks every pane on it: what is being waited for is the quiet, not
+    # the speed of the machine underneath it.
+    deadline = time.time() + 25
+    while time.time() < deadline:
+        armed = tmux("show-options", "-pqv", "-t", pane,
+                     "@sticky_send_at").strip()
+        if armed:
+            break
+        time.sleep(0.1)
+    else:
+        pytest.fail("a notice about a limit should have set a clock")
+
+    at, _, rest = armed.partition(":")
+    _, _, saying = rest.partition(":")
+    assert saying == "continue", f"and it should say so: {armed!r}"
+    assert float(at) > time.time(), "at a time still to come"
+    assert tmux("show-options", "-pqv", "-t", pane,
+                "@sticky_continue_tries").strip() == "1", "counted"
+    assert tmux("show-options", "-wqv", "-t", pane,
+                "@sticky_waiting").strip() == "1", "and the tab says so"
+    assert "usage limit" in tmux("show-options", "-pqv", "-t", pane,
+                                 "@sticky_continue_saw"), "and what it read"
+
+
+def test_a_new_sidebar_arms_from_what_is_already_on_screen(
+        tmux, server, run_sticky, project, close_windows):
+    """The notice does not have to arrive while anyone is watching.
+
+    A sidebar that has just started has no idea whether the tab in front of
+    it has been quiet for a second or since last night, so it treats the
+    beginning as though the agent had just printed: the first quiet is
+    looked at like any other, and a limit already on screen is found there.
+    Which is what makes `reload` - and a sidebar closed and opened again -
+    pick up an agent that ran out while nothing was running to notice.
+    """
+    agent = Path(project) / "out-of-turns-once"
+    agent.write_text("#!/bin/sh\nwhile read -r line; do\n"
+                     "  printf \"You've hit your usage limit. "
+                     "Try again at 11:59 PM.\\n\"\ndone\n")
+    agent.chmod(0o755)
+    pane = run_sticky("start", project, "--detach", "--agent", "generic",
+                      "--agent-cmd", str(agent)).strip()
+    close_windows.append(pane)
+    time.sleep(0.8)
+    tmux("send-keys", "-t", pane, "a question", "Enter")
+    time.sleep(6)
+
+    # Everything the first sidebar worked out, thrown away: the notice is
+    # still the last thing on the pane, and nothing anywhere says so.
+    tmux("set-option", "-p", "-u", "-t", pane, "@sticky_send_at")
+    tmux("set-option", "-p", "-u", "-t", pane, "@sticky_continue_tries")
+    tmux("set-option", "-w", "-u", "-t", pane, "@sticky_waiting")
+    run_sticky("reload", "--quiet")
+
+    deadline = time.time() + 25
+    while time.time() < deadline:
+        armed = tmux("show-options", "-pqv", "-t", pane,
+                     "@sticky_send_at").strip()
+        if armed:
+            break
+        time.sleep(0.1)
+    else:
+        pytest.fail("a sidebar should read the pane it is handed")
+    assert armed.endswith(":continue"), f"and act on it: {armed!r}"
+    assert tmux("show-options", "-wqv", "-t", pane,
+                "@sticky_waiting").strip() == "1", "and the tab says so"
+
+
+def test_a_turn_of_your_own_gives_the_count_back(
+        tmux, server, run_sticky, project, close_windows):
+    """Three attempts at a wall, not three attempts ever.
+
+    The count is there to stop an agent poking all night at something
+    waiting will not fix. Once somebody has asked the tab for something
+    themselves and got an answer, it is not that any more, and a tab that
+    ran out once last night should not spend the rest of its life one
+    strike from the end.
+
+    The same test pins the other half of it: the old notice is still on
+    screen above the answer, and acting on that would set a clock for a
+    limit that lifted hours ago.
+    """
+    agent = Path(project) / "out-of-turns-sometimes"
+    agent.write_text(
+        "#!/bin/sh\nwhile read -r line; do\n"
+        "  case \"$line\" in\n"
+        "    *limit*) printf \"You've hit your usage limit. "
+        "Try again at 11:59 PM.\\n\" ;;\n"
+        "    *) printf 'here you go\\n' ;;\n"
+        "  esac\ndone\n")
+    agent.chmod(0o755)
+    pane = run_sticky("start", project, "--detach", "--agent", "generic",
+                      "--agent-cmd", str(agent)).strip()
+    close_windows.append(pane)
+    time.sleep(0.8)
+    tmux("send-keys", "-t", pane, "mind the limit", "Enter")
+
+    deadline = time.time() + 25
+    while time.time() < deadline:
+        if tmux("show-options", "-pqv", "-t", pane,
+                "@sticky_send_at").strip():
+            break
+        time.sleep(0.1)
+    else:
+        pytest.fail("the notice should have set a clock")
+    assert tmux("show-options", "-pqv", "-t", pane,
+                "@sticky_continue_tries").strip() == "1"
+
+    # Called off, the way `t` then `cancel` does, and then asked something
+    # in person. The answer arrives under a notice that is still on screen.
+    run_sticky("commit", "--at", "cancel", "--pane", pane)
+    tmux("send-keys", "-t", pane, "hello", "Enter")
+    time.sleep(8)
+
+    assert not tmux("show-options", "-pqv", "-t", pane,
+                    "@sticky_continue_tries").strip(), "the three come back"
+    assert not tmux("show-options", "-pqv", "-t", pane,
+                    "@sticky_send_at").strip(), "on a notice already dealt with"
+
+
+def test_the_clock_can_be_called_off_by_clicking_it(
+        tmux, server, run_sticky, sticky_home, project, close_windows):
+    """The row is the button. Clicking it stands the clock down, clicking
+    it again puts it back.
+
+    The time is parked rather than thrown away: a clock you have turned off
+    is one you may well want back, and the hour it was set for is not a
+    thing anybody should have to remember. And off has to mean off - the
+    sidebar arms a tab by reading it when it goes quiet, so without a guard
+    it would find the same notice a minute later and start the whole thing
+    again behind your back.
+    """
+    import glob
+    import json
+
+    agent = Path(project) / "out-of-turns-click"
+    agent.write_text("#!/bin/sh\nwhile read -r line; do\n"
+                     "  printf \"You've hit your usage limit. "
+                     "Try again at 11:59 PM.\\n\"\ndone\n")
+    agent.chmod(0o755)
+    pane = run_sticky("start", project, "--detach", "--agent", "generic",
+                      "--agent-cmd", str(agent)).strip()
+    close_windows.append(pane)
+    time.sleep(0.8)
+    tmux("send-keys", "-t", pane, "a question", "Enter")
+
+    deadline = time.time() + 25
+    while time.time() < deadline:
+        armed = tmux("show-options", "-pqv", "-t", pane,
+                     "@sticky_send_at").strip()
+        if armed:
+            break
+        time.sleep(0.1)
+    else:
+        pytest.fail("the notice should have set a clock")
+
+    # By partner, not by being the first sidebar on the server: the whole
+    # suite shares one, and every other test has left one standing.
+    side = next(line.split()[0] for line in
+                tmux("list-panes", "-a", "-F",
+                     "#{pane_id} #{@sticky_role} #{@sticky_partner}"
+                     ).splitlines()
+                if line.split()[1:] == ["sidebar", pane])
+
+    def clock_row():
+        for path in glob.glob(f"{sticky_home}/**/sidebar-rows.json",
+                              recursive=True):
+            with open(path) as fh:
+                rows = json.load(fh)
+            if rows.get("pane") != side:
+                continue
+            for hit in rows.get("hits", []):
+                if hit["id"] == "@clock":
+                    return str(hit["row"])
+        return None
+
+    stop = time.time() + 10
+    while time.time() < stop and clock_row() is None:
+        time.sleep(0.2)
+    row = clock_row()
+    assert row is not None, "the clock row should be something to click"
+    run_sticky("click", "--pane", side, "--y", row, "--x", "0")
+    time.sleep(2)
+    assert not tmux("show-options", "-pqv", "-t", pane,
+                    "@sticky_send_at").strip(), "clicked once, it stands down"
+    assert tmux("show-options", "-pqv", "-t", pane,
+                "@sticky_send_at_off").strip() == armed, "the time is kept"
+    assert not tmux("show-options", "-wqv", "-t", pane,
+                    "@sticky_waiting").strip(), "and the tab stops waiting"
+
+    # Long enough for the tab to go quiet again under the same notice.
+    time.sleep(6)
+    assert not tmux("show-options", "-pqv", "-t", pane,
+                    "@sticky_send_at").strip(), "off stays off"
+
+    run_sticky("click", "--pane", side, "--y", row, "--x", "0")
+    time.sleep(2)
+    assert tmux("show-options", "-pqv", "-t", pane,
+                "@sticky_send_at").strip() == armed, "clicked again, it is back"
+    assert tmux("show-options", "-wqv", "-t", pane,
+                "@sticky_waiting").strip() == "1", "and the tab says so again"
+
+
+def test_it_gives_up_after_three_attempts(
+        tmux, server, run_sticky, project, close_windows):
+    """Three and no more. If three have not got past it, something is wrong
+    that waiting will not fix, and an agent left poking a wall all night is
+    worse than one that stopped."""
+    agent = Path(project) / "out-of-turns-always"
+    agent.write_text("#!/bin/sh\nwhile read -r line; do\n"
+                     "  printf \"You've hit your usage limit. "
+                     "Try again at 11:59 PM.\\n\"\ndone\n")
+    agent.chmod(0o755)
+    pane = run_sticky("start", project, "--detach", "--agent", "generic",
+                      "--agent-cmd", str(agent)).strip()
+    close_windows.append(pane)
+    time.sleep(0.8)
+
+    # Three already spent, and a sidebar that has read that off the pane:
+    # the count lives there so a reload does not hand out three more.
+    tmux("set-option", "-p", "-t", pane, "@sticky_continue_tries", "3")
+    run_sticky("reload", "--quiet")
+    time.sleep(1.5)
+
+    tmux("send-keys", "-t", pane, "a question", "Enter")
+    time.sleep(6)
+    assert not tmux("show-options", "-pqv", "-t", pane,
+                    "@sticky_send_at").strip(), "it should have stopped"
+
+
+def test_a_timer_can_be_called_off(
+        tmux, server, run_sticky, project, close_windows):
+    pane = run_sticky("start", project, "--detach", "--agent", "generic",
+                      "--agent-cmd", "cat").strip()
+    close_windows.append(pane)
+    time.sleep(0.8)
+    run_sticky("add", "--pane", pane, "--note", "not yet", "--text", "output")
+    run_sticky("commit", "--at", "2h", "--pane", pane)
+    assert tmux("show-options", "-pqv", "-t", pane, "@sticky_send_at").strip()
+    run_sticky("commit", "--at", "cancel", "--pane", pane)
+    assert not tmux("show-options", "-pqv", "-t", pane,
+                    "@sticky_send_at").strip()
+
+
+def test_the_timer_key_offers_the_time_the_agent_printed(
+        tmux, server, run_sticky, project, close_windows):
+    """`t` in the sidebar, and where the time in its prompt comes from.
+
+    The whole of the guess is that it is a default in a line you can edit:
+    the pane said half past midnight, so that is what the prompt opens
+    with, and the deadline is set by the Enter that follows it. A vendor
+    that changes its wording leaves the prompt empty and you type the time,
+    which is what you did before there was a key for this.
+
+    The longest of the real wordings on purpose: it is wider than a pane
+    with a sidebar beside it, so the word "limit" and the time it is about
+    end up on different rows - and the first of those rows has been pushed
+    into the history by the reflow that opening the sidebar caused.
+    """
+    when = time.localtime(time.time() + 86400)
+    notice = ("You have hit your usage limit. You can try again at "
+              + time.strftime("%b %d, %Y", when) + " 12:32 AM.")
+    expect = time.strftime("%Y-%m-%d", when) + " 00:32"
+    agent = fake_claude(project, body=f"printf '{notice}\\n'")
+    pane = run_sticky("start", project, "--detach", "--agent", "generic",
+                      "--agent-cmd", agent).strip()
+    close_windows.append(pane)
+    time.sleep(0.8)
+    run_sticky("add", "--pane", pane, "--note", "when you can",
+               "--text", "some output")
+
+    def panes(role):
+        return [row.split("\t")[0] for row in tmux(
+            "list-panes", "-t", pane, "-F",
+            "#{pane_id}\t#{@sticky_role}").splitlines()
+            if row.endswith(f"\t{role}")]
+
+    def until(what, why):
+        deadline = time.time() + 10
+        while time.time() < deadline:
+            answer = what()
+            if answer:
+                return answer
+            time.sleep(0.1)
+        pytest.fail(why)
+
+    sidebar = until(lambda: panes("sidebar"), "no sidebar was opened")[0]
+    # The help panel is showing until the first note exists, and any key
+    # takes it away rather than acting - so wait until the note is drawn.
+    until(lambda: "when you" in tmux("capture-pane", "-p", "-t", sidebar),
+          "the sidebar never showed the note")
+
+    tmux("send-keys", "-t", sidebar, "t")
+    prompt = until(lambda: panes("note"), "t opened no prompt")[0]
+    shown = until(lambda: ("send at>" in tmux("capture-pane", "-p", "-t",
+                                              prompt)) and
+                  tmux("capture-pane", "-p", "-t", prompt),
+                  "the prompt never drew its line")
+    assert f"send at> {expect}" in shown, \
+        f"the guess was not offered: {shown!r}"
+
+    tmux("send-keys", "-t", prompt, "Enter")
+    due = until(lambda: tmux("show-options", "-pqv", "-t", pane,
+                             "@sticky_send_at").strip(),
+                "Enter set no deadline")
+    at = float(due.partition(":")[0])
+    assert time.strftime("%Y-%m-%d %H:%M", time.localtime(at)) == expect
+
+
+def test_a_tab_that_went_quiet_says_so(
+        tmux, server, run_sticky, project, close_windows):
+    """Printed, then silent: the nearest thing to "finished" that holds for
+    every agent, since a bell is a thing an agent may or may not ring.
+
+    The mark is a window option the status line reads. It is not set on the
+    tab being looked at - there is nothing to tell somebody already
+    watching - and looking at the tab clears it.
+    """
+    pane = run_sticky("start", project, "--detach",
+                      "--agent-cmd", fake_claude(project)).strip()
+    close_windows.append(pane)
+    time.sleep(0.8)
+    window = tmux("display-message", "-p", "-t", pane, "#{window_id}").strip()
+
+    def done():
+        return tmux("show-options", "-wqv", "-t", pane, "@sticky_done").strip()
+
+    # Printing is what `cat` does with anything typed at it, and unlike
+    # respawning the pane it does not take the sidebar with it: a pane that
+    # exits is a tab that gets swept.
+    tmux("respawn-pane", "-k", "-t", pane, "cat")
+    time.sleep(0.8)
+
+    # Looked at, so nothing to say however much it prints.
+    tmux("select-window", "-t", window)
+    tmux("send-keys", "-t", pane, "working", "Enter")
+    time.sleep(4)
+    assert done() != "1", "the tab you are watching does not need telling"
+
+    # Backgrounded, printing, then quiet.
+    tmux("select-window", "-t", "sticky:0")   # the fixture's own window
+    time.sleep(0.3)
+    assert tmux("display-message", "-p", "-t", pane,
+                "#{window_active}").strip() == "0", "the tab is in the background"
+    tmux("send-keys", "-t", pane, "an answer", "Enter")
+    deadline = time.time() + 8
+    while time.time() < deadline and done() != "1":
+        time.sleep(0.1)
+    assert done() == "1", "a quiet tab in the background should say so"
+
+    # And looking at it is what answers the question.
+    tmux("select-window", "-t", window)
+    time.sleep(0.6)
+    assert done() != "1", "arriving at the tab clears the mark"
+
+
+def test_a_repaint_is_not_an_answer(
+        tmux, server, run_sticky, project, close_windows):
+    """Bytes are not news.
+
+    tmux fires `pane-activity` for everything an agent writes, and an agent
+    that redraws its own input box writes a great deal that leaves the
+    screen exactly as it was. Counted as output, each of those starts the
+    clock that marks a tab finished, so tabs light up having done nothing -
+    and the mark stops meaning anything. What the pane says is the only
+    thing that can tell the two apart.
+    """
+    agent = Path(project) / "repainting"
+    # Draws one line, then rewrites that same line every few seconds: the
+    # gaps are wider than DONE_QUIET, so each redraw looks exactly like an
+    # agent that printed something and stopped. Which is the shape of the
+    # thing being guarded against - a tab lighting up between one glance
+    # and the next with nothing new on it.
+    agent.write_text("#!/bin/sh\nprintf 'starting up\\n'\nsleep 3\n"
+                     "printf 'here you go\\n'\n"
+                     "while :; do sleep 4; "
+                     "printf '\\033[A\\rhere you go\\n'; done\n")
+    agent.chmod(0o755)
+    pane = run_sticky("start", project, "--detach", "--agent", "generic",
+                      "--agent-cmd", str(agent)).strip()
+    close_windows.append(pane)
+    window = tmux("display-message", "-p", "-t", pane, "#{window_id}").strip()
+
+    def done():
+        return tmux("show-options", "-wqv", "-t", pane, "@sticky_done").strip()
+
+    # The line it really did draw is real output, and marks the tab. (The
+    # banner above it is not: whatever is on screen when a sidebar starts is
+    # the baseline it compares against, never news in its own right.)
+    deadline = time.time() + 15
+    while time.time() < deadline and done() != "1":
+        time.sleep(0.1)
+    assert done() == "1", "the line it drew is an answer"
+
+    # Read it, and go away again. From here on nothing changes on screen,
+    # though the bytes never stop.
+    tmux("select-window", "-t", window)
+    time.sleep(1.0)
+    assert done() != "1", "arriving at the tab clears the mark"
+    tmux("select-window", "-t", "sticky:0")
+    # Watched the whole way rather than looked at once at the end. Taken as
+    # output, each redraw sets the mark and the next redraw clears it
+    # again, so a single glance can land in either half of that and prove
+    # nothing. What is being asserted is that it never lights up at all.
+    seen = []
+    until = time.time() + 12
+    while time.time() < until:
+        seen.append(done())
+        time.sleep(0.25)
+    assert "1" not in seen, (
+        f"a redraw of the same screen is not an answer: "
+        f"marked on {seen.count('1')} of {len(seen)} looks")
+
+
+def test_a_reload_is_not_news(
+        tmux, server, run_sticky, project, close_windows):
+    """Restarting the sidebars is not the tabs saying something.
+
+    A sidebar that has just started cannot tell whether the tab in front of
+    it has been quiet for a second or since last night, so it treats the
+    first look as though the agent had just printed - which is what lets a
+    limit notice already on screen be found. The mark must not follow it
+    there: `reload` restarts every sidebar at once, so one keystroke would
+    otherwise light up every tab in the list at the same moment, and a mark
+    that means "I was restarted" means nothing at all.
+    """
+    pane = run_sticky("start", project, "--detach",
+                      "--agent-cmd", fake_claude(project)).strip()
+    close_windows.append(pane)
+    window = tmux("display-message", "-p", "-t", pane, "#{window_id}").strip()
+
+    def done():
+        return tmux("show-options", "-wqv", "-t", pane, "@sticky_done").strip()
+
+    # Read, then left alone. Nothing is outstanding and nothing is printed
+    # in it from here on.
+    tmux("select-window", "-t", window)
+    time.sleep(1.5)
+    tmux("select-window", "-t", "sticky:0")
+    time.sleep(4)
+    assert done() != "1", "nothing has happened yet"
+
+    run_sticky("reload", "--quiet")
+    time.sleep(8)
+    assert done() != "1", "and a reload is still nothing happening"
+
+    # But the tab has not gone deaf: what it says after the reload counts.
+    tmux("respawn-pane", "-k", "-t", pane, "cat")
+    time.sleep(1)
+    tmux("send-keys", "-t", pane, "an answer", "Enter")
+    deadline = time.time() + 10
+    while time.time() < deadline and done() != "1":
+        time.sleep(0.1)
+    assert done() == "1", "a restarted sidebar still hears the tab"
+
+
 def test_output_wakes_the_sidebar(
         tmux, server, run_sticky, sticky_home, project, close_windows):
     """There is no heartbeat left, so this is the only thing that redraws.

@@ -57,6 +57,7 @@ from .commands import (
     ago,
     ask,
     ask_project,
+    ask_when,
     attach,
     cmd_add,
     cmd_attach,
@@ -101,6 +102,7 @@ from .commands import (
 )
 from .config import (
     ACTIVITY_HOOK,
+    ARRIVE_HOOK,
     CONFIG_TEMPLATE,
     DEFAULT_SIDEBAR_WIDTH,
     DEFAULT_VIRTUAL_ROWS,
@@ -157,8 +159,10 @@ from .sidebar import (
     close_column,
     cmd_sidebar,
     draw,
+    due_line,
     foot_lines,
     footer_text,
+    how_long,
     help_sections,
     note_bullet,
     note_style,
@@ -190,6 +194,7 @@ from .store import (
 )
 from .tmux import DEFAULT_SOCKET, SESSION_NAME, Tmux
 from .util import (
+    CLOCK_HIT,
     ANSI,
     ARROWS,
     BOLD,
@@ -199,6 +204,7 @@ from .util import (
     COL_PENDING,
     DIM,
     RESET,
+    RESET_ROWS,
     REVERSE,
     STATUS_COLOR,
     STRIKE,
@@ -209,13 +215,17 @@ from .util import (
     lay_out,
     prompt_line,
     read_key,
+    reset_notice,
+    reset_time,
     row_step,
     self_path,
     shell_quote,
     terminal_size,
     terminal_width,
     truncate,
+    twenty_four_hour,
     visible,
+    when_to_send,
     wrap,
 )
 

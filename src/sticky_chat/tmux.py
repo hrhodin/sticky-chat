@@ -115,12 +115,21 @@ class Tmux:
             lines.pop()
         return lines + [""] * (len(asks) - len(lines))
 
-    def capture(self, pane: str, start: int, end: int) -> list[str]:
-        """Rows as displayed. Coordinates: 0 = top visible row, negative = history."""
-        return self.capture_with(pane, start, end, "")[0]
+    def capture(self, pane: str, start: int, end: int,
+                joined: bool = False) -> list[str]:
+        """Rows as displayed. Coordinates: 0 = top visible row, negative = history.
+
+        `joined` asks tmux to put a line that wrapped back together. Only
+        tmux knows which rows are the continuation of one before them, and a
+        sentence read across the break is one whose halves never meet -
+        which is a note placed on the wrong row, or a time nobody finds. It
+        is off by default because the rows a note is anchored to are the
+        rows on the screen, and joining them renumbers the screen.
+        """
+        return self.capture_with(pane, start, end, "", joined)[0]
 
     def capture_with(self, pane: str, start: int, end: int,
-                     template: str) -> tuple[list[str], str]:
+                     template: str, joined: bool = False) -> tuple[list[str], str]:
         """The rows, and one format read taken straight after them.
 
         Both in the same invocation: the second question is free, and asking
@@ -130,8 +139,8 @@ class Tmux:
         """
         if end < start:
             return [], (self.fmt(pane, template) if template else "")
-        commands = [["capture-pane", "-p", "-t", pane,
-                     "-S", str(start), "-E", str(end)]]
+        commands = [["capture-pane", "-p", *(["-J"] if joined else []),
+                     "-t", pane, "-S", str(start), "-E", str(end)]]
         if template:
             commands.append(["display-message", "-p", "-t", pane, template])
         rows = self.many(*commands).split("\n")

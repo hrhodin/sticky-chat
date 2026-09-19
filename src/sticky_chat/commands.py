@@ -54,20 +54,24 @@ from .store import (
 )
 from .tmux import SESSION_NAME, Tmux
 from .util import (
+    CLOCK_HIT,
     BOLD,
     COL_COMMITTED,
     COL_PENDING,
     DIM,
     RESET,
+    RESET_ROWS,
     complete_path,
     die,
     prompt_line,
+    reset_time,
     self_path,
     shell_quote,
     terminal_size,
     terminal_width,
     truncate,
     visible,
+    when_to_send,
 )
 
 
@@ -408,12 +412,134 @@ def expand_paste(tm: Tmux, pane: str, agent: Agent = CLAUDE) -> None:
         tm.ok("paste-buffer", "-p", "-b", "sticky", "-t", pane)
 
 
+def ask_when(tm: Tmux, pane: str | None) -> str:
+    """Ask when the batch should go. "" means cancelled: nothing is set.
+
+    The line starts filled in with what the agent itself said about its
+    limit, read off the pane the notes were taken in - `reset_time` is
+    where that reading is done, and why getting it wrong costs nothing. A
+    time that cannot be read is said so on the spot with what you typed
+    still there to correct, which is how the project prompt does it.
+    """
+    guess = ""
+    if pane:
+        try:
+            # Joined, because the longest of these notices is wider than
+            # a pane with a sidebar beside it: unwrapped, the word "limit"
+            # and the time it is about land on different rows and neither
+            # half is a notice on its own. And a little history as well as
+            # the screen, because opening the sidebar narrows the pane -
+            # tmux reflows it, and the first half of something printed
+            # before that has been pushed above the top row.
+            #
+            # `reset_time` takes the last rows of what comes back that have
+            # anything on them: a pane with room to spare ends in blanks.
+            height = int(tm.fmt(pane, "#{pane_height}") or 0)
+            guess = reset_time(tm.capture(pane, -RESET_ROWS, height - 1,
+                                          joined=True))
+        except (RuntimeError, ValueError):
+            guess = ""                   # a pane gone: still worth asking
+    print(f"{BOLD}Send later{RESET}  {DIM}Enter sets it \u00b7 Esc "
+          f"cancels{RESET}\n")
+    print(f"{DIM}  4h \u00b7 90m \u00b7 8pm \u00b7 00:32 \u00b7 "
+          f"2026-09-16 00:32{RESET}")
+    if guess:
+        print(f"{DIM}  the pane says the limit resets at {guess}{RESET}")
+    set_for = (tm.option(pane, "@sticky_send_at") if pane else "")
+    set_for = set_for.partition(":")[0]
+    if set_for.replace(".", "", 1).isdigit():
+        # The only way to call one off without leaving the tab, so the
+        # word is said where it is needed and nowhere else.
+        print(f"{DIM}  cancel calls off the one set for "
+              f"{time.strftime('%H:%M', time.localtime(float(set_for)))}"
+              f"{RESET}")
+    print()
+
+    text = guess
+    while True:
+        outcome, typed = prompt_line("send at> ", text)
+        if outcome != "save":
+            return ""                    # Esc, and anything but Enter
+        text = typed.strip()
+        if not text:
+            return ""
+        if text.lower() == "cancel" or when_to_send(text):
+            return text
+        print(f"{DIM}cannot read a time from {text!r}{RESET}\n")
+
+
 def cmd_commit(args) -> int:
     tm = Tmux(args.socket)
     pane = claude_pane(tm, args.pane)
     store = open_store(tm, args.pane, args.project,
                        getattr(args, 'store', None))
     notes = store.load()
+
+    # `t` in the sidebar, in two steps, the way the project prompt is: this
+    # one opens a pane, and what runs in it is this same command with the
+    # other flag. A key binding has no terminal of its own to ask on.
+    if getattr(args, "ask_at", False):
+        command = [self_path(), "commit", "--ask-at-here"]
+        for flag, value in (("--socket", args.socket), ("--pane", pane),
+                            ("--project", args.project),
+                            ("--store", getattr(args, "store", None))):
+            if value:
+                command += [flag, value]
+        if getattr(args, "to_tab", None):
+            # Where it goes is asked here, not in there: the prompt is
+            # about when, and a flag accepted and quietly dropped is worse
+            # than one that was never taken.
+            command += ["--to-tab", str(args.to_tab)]
+        try:
+            # Taller than the note prompt's default, because this one has
+            # a line of shapes and a line of where the guess came from
+            # above the line you type on.
+            open_prompt(tm, command, pane, "40%")
+        except RuntimeError:
+            tm.ok("display-message", "sticky: could not open the prompt")
+            return 1
+        return 0
+
+    # Later, rather than now. The deadline lives on the pane, so it
+    # survives the sidebar being restarted and dies with the tab it belongs
+    # to; the sidebar is what watches the clock, being the one thing here
+    # that is already awake and already has a select timeout to cap.
+    asked = getattr(args, "ask_at_here", False)
+    said = ask_when(tm, pane) if asked else getattr(args, "at", None)
+    if said:
+        def told(message: str) -> int:
+            """Say what was done, where it will be read.
+
+            The prompt's pane closes as this returns, so anything printed
+            there goes with it: from in here the answer belongs on the
+            status line. The sidebar says the rest for as long as it is
+            true: a row naming what is going and how long until it, and
+            `↳ at HH:MM` in the footer.
+            """
+            if asked:
+                tm.ok("display-message", f"sticky: {message}")
+            elif not args.quiet:
+                print(f"sticky: {message}")
+            return 0
+
+        if said.strip().lower() == "cancel":
+            tm.ok("set-option", "-p", "-u", "-t", pane, "@sticky_send_at")
+            nudge(tm, pane, store)
+            return told("not sending on a timer any more")
+        when = when_to_send(said)
+        if not when:
+            die(f"cannot read a time from {said!r}: try 4h, 90m, 8pm, "
+                f"00:32 or 2026-09-16 00:32")
+        waiting = [n for n in notes if n["status"] == "pending"
+                   and n["note"].strip() and not n.get("deleted")]
+        tm.ok("set-option", "-p", "-t", pane, "@sticky_send_at",
+              f"{when:.0f}:{getattr(args, 'to_tab', None) or ''}")
+        nudge(tm, pane, store)
+        return told(
+            f"{len(waiting)} note(s) will go at "
+            f"{time.strftime('%H:%M on %a %d %b', time.localtime(when))}")
+    if asked:
+        return 0                          # Esc: no timer, nothing changed
 
     # Where the notes are read from and where they are handed to are two
     # different questions. Normally the same tab answers both; `--to-tab`
@@ -738,6 +864,10 @@ def cmd_fork(args) -> int:
                   if session else base)
     tm.set_option(left, "@sticky_session", key)
     tm.set_option(left, "@sticky_agent", agent.name)
+    # On the window, not the pane: the status line resolves a format
+    # against whichever pane is active, and half of a sticky window is
+    # the sidebar.
+    tm.ok("set-option", "-w", "-t", left, "@sticky_mark", agent.mark)
     # A branch is a new conversation with a new id, and on an agent that
     # names its own it is exactly the id we do not have - so a fork looks for
     # one the same way a fresh tab does.
@@ -830,6 +960,53 @@ def dismissing(tm: Tmux, pane: str) -> bool:
         return False
 
 
+def stand_down(tm: Tmux, pane: str, store) -> int:
+    """The clock row clicked: off if it is on, on if it is off.
+
+    The time itself is not thrown away, only moved aside, because a clock
+    you have turned off is one you may well want back and the hour it was
+    set for is not a thing anybody should have to remember. Nothing reads
+    the value where it is parked except the row that draws it struck out.
+
+    Off is off: the sidebar arms a tab by scanning it when it goes quiet,
+    and would otherwise find the same notice a minute later and set the
+    whole thing going again.
+    """
+    target = claude_pane(tm, pane) or pane
+    # A double click arrives as two presses, and turning a thing off and
+    # straight back on again is not what anybody meant by it.
+    guard = os.path.join(store.dir, ".last-clock")
+    try:
+        with open(guard) as fh:
+            if time.time() - float(fh.read()) < 1.0:
+                return 0
+    except (OSError, ValueError):
+        pass
+    try:
+        with open(guard, "w") as fh:
+            fh.write(str(time.time()))
+    except OSError:
+        pass
+
+    armed = (tm.option(target, "@sticky_send_at") or "").strip()
+    stood = (tm.option(target, "@sticky_send_at_off") or "").strip()
+    if armed:
+        tm.ok("set-option", "-p", "-t", target, "@sticky_send_at_off", armed)
+        tm.ok("set-option", "-p", "-u", "-t", target, "@sticky_send_at")
+        tm.ok("set-option", "-w", "-u", "-t", target, "@sticky_waiting")
+    elif stood:
+        tm.ok("set-option", "-p", "-t", target, "@sticky_send_at", stood)
+        tm.ok("set-option", "-p", "-u", "-t", target, "@sticky_send_at_off")
+        if stood.partition(":")[2].partition(":")[2]:
+            # Only the kind that restarts an agent wears the clock on its
+            # tab; a batch of notes on a timer never has.
+            tm.ok("set-option", "-w", "-t", target, "@sticky_waiting", "1")
+    else:
+        return 0
+    nudge(tm, pane)
+    return 0
+
+
 def cmd_click(args) -> int:
     """A click in the sidebar.
 
@@ -859,6 +1036,8 @@ def cmd_click(args) -> int:
                    None)
     if hit is None:
         return 0
+    if hit["id"] == CLOCK_HIT:
+        return stand_down(tm, pane, store)
     notes = store.load()
     note = next((n for n in notes if n["id"] == hit["id"]), None)
     if note is None:
@@ -979,7 +1158,11 @@ def open_tab(tm: Tmux, record: dict, command: str, client: str | None) -> str:
     width = int(record.get("width") or DEFAULT_SIDEBAR_WIDTH)
     tm.set_option(left, "@sticky_agent_cmd", command)
     tm.set_option(left, "@sticky_session", record.get("session", ""))
-    tm.set_option(left, "@sticky_agent", agent.name)   # before the sidebar
+    tm.set_option(left, "@sticky_agent", agent.name)      # before the sidebar
+    # On the window, not the pane: the status line resolves a format
+    # against whichever pane is active, and half of a sticky window is
+    # the sidebar.
+    tm.ok("set-option", "-w", "-t", left, "@sticky_mark", agent.mark)
     mark_launch(tm, left, agent, launched, record.get("agent_session", ""))
     open_sidebar(tm, self_path(), left, project, width,
                  record.get("store") or None)
@@ -1647,7 +1830,11 @@ def cmd_start(args) -> int:
     window = tm.fmt(left, "#{session_name}:#{window_index}")
     tm.set_option(left, "@sticky_agent_cmd", command)
     tm.set_option(left, "@sticky_session", session or unknown)
-    tm.set_option(left, "@sticky_agent", agent.name)   # before the sidebar
+    tm.set_option(left, "@sticky_agent", agent.name)      # before the sidebar
+    # On the window, not the pane: the status line resolves a format
+    # against whichever pane is active, and half of a sticky window is
+    # the sidebar.
+    tm.ok("set-option", "-w", "-t", left, "@sticky_mark", agent.mark)
     mark_launch(tm, left, agent, launched)             # and before it, too
     open_sidebar(tm, binary, left, project, args.sidebar_width, store_dir)
     # A bare --continue leaves the id with the agent, so the tab is remembered

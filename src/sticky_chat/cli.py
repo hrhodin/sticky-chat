@@ -199,6 +199,16 @@ def build_parser() -> argparse.ArgumentParser:
                    help="press Enter too, instead of leaving it to you")
     p.add_argument("--quiet", action="store_true",
                    help="say nothing: key bindings show stdout in the pane")
+    p.add_argument("--at", metavar="WHEN",
+                   help="send later instead of now: `4h`, `90m`, `8pm`, "
+                        "`00:32` or `2026-09-16 00:32`. `cancel` calls it "
+                        "off")
+    p.add_argument("--ask-at", action="store_true",
+                   help="ask when in a floating pane, filled in with the "
+                        "reset time the agent printed: what `t` in the "
+                        "sidebar does")
+    p.add_argument("--ask-at-here", action="store_true",
+                   help="ask on this terminal: what that prompt runs")
     p.add_argument("--to-tab", type=int, metavar="N",
                    help="paste into tab N's agent instead of this tab's - "
                         "the numbers tmux shows in the status line")
