@@ -12,10 +12,11 @@ Four profiles. `claude` is the default and is exactly what the program did
 before this file existed. `generic` is the honest fallback for anything that
 prints a transcript: it runs the command you name and claims nothing else, so
 the features that need a conversation id say so rather than build a command
-line the agent would refuse. `gemini` and `codex` carry what their own
-documentation says, plus - for gemini - what a transcript on this machine
-actually looked like, and both are marked untested, because nobody has run
-sticky-chat on them.
+line the agent would refuse. `gemini`, `codex` and `agy` began as what
+their own documentation says, and have since been run: every profile here
+is marked tested. A new one arrives `tested=False` with a `caveat` saying
+which part is unproven, and loses it when somebody has taken a tab through
+end to end rather than read the flags and hoped.
 
 Nothing here talks to tmux beyond borrowing the session name for an
 environment variable, so it sits above the store and the placer and can be
@@ -350,7 +351,6 @@ CODEX = Agent(
     short="Codex",
     command="codex",
     mark="\u25c6",
-    tested=False,
     exit_hint="ending Codex closes the tab",
     resume_flags=("resume",),
     continue_flags=("resume", "--last"),
@@ -362,10 +362,6 @@ CODEX = Agent(
     state_db_id_column="id",
     state_db_time_columns=("created_at", "created_at_ms"),
     state_db_project_column="cwd",
-    caveat=("its flags were read back off `codex resume --help` on Codex CLI "
-            "0.153.4 and match, and finding a conversation is proven against "
-            "a real state database - but no tab has gone through sticky end "
-            "to end: no note into its prompt, and no resume on the id"),
 )
 
 

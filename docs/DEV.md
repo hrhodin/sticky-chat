@@ -845,9 +845,11 @@ fallback for anything that prints a transcript: you name the command with
 arguments and no paste folding - a second paste into an agent that never
 folded would send the block twice - while keeping the conservative output
 heuristics, which are a guess about a terminal frame rather than about
-Claude. **`gemini` and `agy` were tried end to end and pass; `codex` is
-marked `tested=False`**, which `sticky-chat` says when you select it and in
-`--help`, with the `caveat` field carrying what exactly is unproven.
+Claude. **`gemini`, `codex` and `agy` were all tried end to end and pass.**
+A profile that has not been arrives `tested=False` with a `caveat` saying
+which part is unproven, which `sticky-chat` prints when you select it and
+marks in `--help`; it loses both when somebody has taken a tab through
+rather than read the flags and hoped.
 
 Gemini CLI 0.46.0, 2026-09-08: the tab started, the transcript was on disk
 before the first prompt was answered, `discover_session` had the id within

@@ -770,8 +770,9 @@ class TestAgentProfiles:
         most recent rather than for the picker: the tab you pressed the key
         in has already answered "which conversation"."""
         codex = sticky.CODEX
-        assert codex.tested is False
-        assert "codex (untested)" in sticky.agent_choices()
+        assert codex.tested, "a tab has been through it end to end"
+        assert "untested" not in sticky.agent_choices(), \
+            "and so has every other profile here"
         assert codex.command == "codex"
         assert codex.resume_flags == ("resume",)
         assert codex.continue_flags == ("resume", "--last")
