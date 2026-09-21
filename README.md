@@ -139,7 +139,7 @@ there struck out, so you can see what it was going to do and click again to
 put it back - or `t` then `cancel` to be rid of it.
 
 The tab list at the bottom says which agent is in which tab, one character
-hard against the name: `✦` Claude Code, `◆` Codex, `✧` Gemini, `▲` Antigravity,
+in front of the name: `✦` Claude Code, `◆` Codex, `✧` Gemini, `▲` Antigravity,
 `$` a shell, `•` anything else. The mark is highlighted while a tab is
 waiting to be read - it printed something and then went quiet, which is
 the only definition of "finished" that holds for every agent - and looking

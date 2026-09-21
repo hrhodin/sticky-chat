@@ -328,10 +328,14 @@ def test_a_tab_with_no_agent_is_listed_on_the_other_row(
                      f"#{{T:status-format[{n}]}}")
         return re.sub(r"#\[[^]]*\]", "", drawn)
 
+    # As the row draws it: the mark goes in front of the name, so that the
+    # names all start in the same column and a mark belongs to the tab on
+    # its right rather than floating between two of them.
     names = {}
     for pane in (agent, shell):
         names[pane] = tmux("display-message", "-p", "-t", pane,
-                           "#{window_index}:#{window_name}").strip()
+                           "#{window_index}:#{@sticky_mark}#{window_name}"
+                           ).strip()
 
     agents, others = row(0, agent), row(1, agent)
     assert names[agent] in agents, f"the agent tab is on row 0: {agents!r}"

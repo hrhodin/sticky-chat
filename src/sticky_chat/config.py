@@ -150,8 +150,10 @@ set -g window-status-current-style "bold"
 # the sidebar - a pane-level mark would come and go as focus moved. A tab
 # without one, which is any window sticky did not open, looks as it always
 # did.
-# Hard against the name, with no space: a mark floating between two tabs
-# belongs to neither of them to look at.
+# In front of the name, hard against it: after it the mark sits between two
+# tabs and reads as belonging to either, and the names no longer start in
+# the same column. Before it, every tab reads `#I:<mark><name>` and the
+# marks line up down the list.
 # The mark is highlighted while a tab is waiting to be read: the agent
 # printed and then went quiet, which is the closest thing to "done" that
 # works for every agent, including one that rings no bell. Only the mark,
@@ -160,8 +162,8 @@ set -g window-status-current-style "bold"
 # A tab waiting for a limit to reset shows a clock instead of its agent's
 # mark: while that is what it is doing, it is the more useful of the two
 # things one character can say.
-set -g window-status-format "#I:#W#{?@sticky_waiting,⧗,#{?@sticky_mark,#{?@sticky_done,#[reverse]#{@sticky_mark}#[noreverse],#{@sticky_mark}},}}#F"
-set -g window-status-current-format "#I:#W#{?@sticky_waiting,⧗,#{?@sticky_mark,#{?@sticky_done,#[reverse]#{@sticky_mark}#[noreverse],#{@sticky_mark}},}}#F"
+set -g window-status-format "#I:#{?@sticky_waiting,⧗,#{?@sticky_mark,#{?@sticky_done,#[reverse]#{@sticky_mark}#[noreverse],#{@sticky_mark}},}}#W#F"
+set -g window-status-current-format "#I:#{?@sticky_waiting,⧗,#{?@sticky_mark,#{?@sticky_done,#[reverse]#{@sticky_mark}#[noreverse],#{@sticky_mark}},}}#W#F"
 
 set -g window-status-style "dim"
 # Two lists, on two rows: agent tabs above, everything else below. The
