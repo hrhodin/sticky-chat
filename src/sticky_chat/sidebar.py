@@ -943,16 +943,16 @@ def cmd_sidebar(args) -> int:
                 # started. Comparing the text is the only way to tell,
                 # and it is free here: the capture had to be taken anyway.
                 screen = "\n".join(visible)
-                if logging:
-                    # A pass that arrives long after the one before it was
-                    # not waiting - the machine was asleep, or this process
-                    # was stopped. Worth saying out loud, because what
-                    # follows a wake is exactly what is under suspicion.
-                    gap = time.time() - woke
-                    if gap > max(idle, SIDEBAR_IDLE) * 2 + 5:
-                        to_log(logging, pane, size,
-                               f"back after {gap:.0f}s away")
-                    woke = time.time()
+                # A pass that arrives long after the one before it was not
+                # waiting: the machine slept, or this process was stopped.
+                # Said out loud in the log because what follows a wake is
+                # what is under suspicion - agents draw clocks, and a clock
+                # that jumps by hours in one step looks exactly like an
+                # answer arriving.
+                gap = time.time() - woke
+                woke = time.time()
+                if logging and gap > max(idle, SIDEBAR_IDLE) * 2 + 5:
+                    to_log(logging, pane, size, f"back after {gap:.0f}s away")
                 if screen != last_screen:
                     if logging:
                         to_log(logging, pane, size,
@@ -962,11 +962,12 @@ def cmd_sidebar(args) -> int:
                                screen.split("\n"))
                     # The first look is the baseline, not news. It still
                     # starts the clock, because a limit notice already on
-                    # screen is the whole point of examining the first
-                    # quiet - but a tab that has sat there saying the same
-                    # thing since yesterday has not just said it, and
-                    # `reload` restarting every sidebar at once would
-                    # otherwise light up every tab in the list.
+                    # screen is the whole point of
+                    # examining the first quiet - but a tab that has sat
+                    # there saying the same thing since yesterday has not
+                    # just said it, and `reload` restarting every sidebar
+                    # at once would otherwise light up every tab in the
+                    # list.
                     if last_screen is not None:
                         settled = True
                         if said_done:
