@@ -506,8 +506,20 @@ def build_frame(placed: list[dict], width: int, height: int,
             grid[top + index] = line
             claimed[top + index] = True
 
+    # Notes that landed on the same row are drawn as one block: the same
+    # line marked twice is one quote with two things to say about it, and
+    # the alternative is what used to happen - the second note written over
+    # the first, which then existed only in the pending count.
     onscreen = sorted(aligned, key=lambda p: p["row"])
-    for index, item in enumerate(onscreen):
+    groups: list[list[dict]] = []
+    for item in onscreen:
+        if groups and groups[-1][0]["row"] == item["row"]:
+            groups[-1].append(item)
+        else:
+            groups.append([item])
+
+    for index, group in enumerate(groups):
+        item = group[0]
         note = item["note"]
         row = item["row"]
         span = min(len(note["rows"]), map_h - row)
@@ -529,48 +541,64 @@ def build_frame(placed: list[dict], width: int, height: int,
             claimed[line] = True
 
         limit = map_h - row
-        if index + 1 < len(onscreen):
-            limit = min(limit, max(1, onscreen[index + 1]["row"] - row))
+        if index + 1 < len(groups):
+            limit = min(limit, max(1, groups[index + 1][0]["row"] - row))
 
-        lines: list[str] = []
+        # Each drawn row, and which note it belongs to. A row that starts a
+        # note is the one that carries that note's button; the quote above
+        # them belongs to the first, which is who a click on it reaches.
+        lines: list[tuple[str, dict, bool]] = []
         # Only the note's first row carries the button, and only that row has
         # to leave it the cells; the rows under it get the full width back.
         head_room = max(4, close_column(width) - 3)
+        shared = len(group) > 1
         if limit > 1:
             snippet = note["quote"].split("\n")[0].strip()
             if snippet:
-                lines.append(f"{DIM}{truncate(snippet, head_room)}{RESET}")
-        remaining = limit - len(lines)
-        bullet = note_bullet(note) + " "
-        # With no quote above it the button shares the first row of text, so
-        # the whole note wraps that much narrower to leave it the cells.
-        room = text_w - 4 if lines else head_room - len(bullet)
-        # "- " marks the note text, so it reads the same here as it does in
-        # the block that gets pasted back to Claude.
-        chunks = wrap(note["note"] or "(no text)", room, remaining)
-        mark = REVERSE if item["id"] == cursor else ""
-        for position, chunk in enumerate(chunks):
-            prefix = bullet if position == 0 else "  "
-            lines.append(f"{colour}{mark}{prefix}{chunk}{RESET}")
+                lines.append((f"{DIM}{truncate(snippet, head_room)}{RESET}",
+                              item, False))
+        for owner in group:
+            remaining = limit - len(lines)
+            if remaining <= 0:
+                break
+            said = owner["note"]
+            tint = note_style(said, owner["match"])
+            bullet = note_bullet(said) + " "
+            # With no quote above it, or with the row above belonging to
+            # another note, the button shares this row - so the text wraps
+            # that much narrower to leave it the cells.
+            room = (head_room - len(bullet) if shared or not lines
+                    else text_w - 4)
+            # "- " marks the note text, so it reads the same here as it does
+            # in the block that gets pasted back to Claude.
+            chunks = wrap(said["note"] or "(no text)", room, remaining)
+            mark = REVERSE if owner["id"] == cursor else ""
+            for position, chunk in enumerate(chunks):
+                prefix = bullet if position == 0 else "  "
+                lines.append((f"{tint}{mark}{prefix}{chunk}{RESET}",
+                              owner, position == 0))
 
-        for offset, rendered in enumerate(lines):
+        for offset, (rendered, owner, starts) in enumerate(lines):
             line = row + offset
             if line >= map_h:
                 break
             prefix = grid[line] if claimed[line] else " "
             rendered = f"{prefix} {rendered}"
-            if offset == 0:                          # click here to strike
-                rendered = with_close(rendered, width, item["id"] == cursor)
+            button = starts if shared else offset == 0
+            if button:                               # click here to strike
+                rendered = with_close(rendered, width,
+                                      owner["id"] == cursor)
             grid[line] = rendered
             claimed[line] = True
             if hits is not None:
                 # Every row the note is written on is a way into it, the way
                 # an entry in either band is: the quote and the answer to it
-                # are one note, and it reads as one block. Only the first row
-                # carries the button, so only that row can strike it out - an
-                # x column past the width is one the mouse never reaches.
-                hits.append({"row": line, "id": item["id"], "onscreen": True,
-                             "x": close_column(width) if offset == 0
+                # are one note, and it reads as one block. Only the row that
+                # starts a note carries the button, so only that row can
+                # strike it out - an x column past the width is one the
+                # mouse never reaches.
+                hits.append({"row": line, "id": owner["id"], "onscreen": True,
+                             "x": close_column(width) if button
                              else 10 ** 6})
 
     if foot_h:

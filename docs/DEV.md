@@ -1155,6 +1155,16 @@ while a tab is stood down: it reads a pane when it goes quiet, and would
 otherwise find the same notice a minute later and start the whole thing
 again behind your back.
 
+Two notes can land on the same row, because the same line marked twice is
+one quote with two things to say about it. `resolve` is right to give both
+of them that row - they both match the text exactly - so the drawing is
+where it has to be handled: rows are grouped before anything is written,
+the quote is said once, and each note's own first row carries its own
+button. Drawn one at a time instead, the second is written over the first
+and `limit` collapses to a single line, which leaves a note that exists
+only in the pending count: not on screen, not in either band, nothing to
+click, and still sent when the batch goes.
+
 `t` in the sidebar asks, rather than making you leave the tab for a shell.
 The prompt opens filled in with whatever the pane says about its own limit:
 `reset_time` takes the last rows that have anything on them and wants the

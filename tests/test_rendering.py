@@ -567,6 +567,49 @@ class TestTheFooterSaysWhenABatchIsDue:
         assert "at " in said, f"a clock, not a duration: {said!r}"
 
 
+class TestTwoNotesOnOneLine:
+    """The same line marked twice is one quote with two things to say.
+
+    Drawn one at a time they land on the same row and the second is written
+    over the first, which then exists only in the pending count: not on
+    screen, not in either band, nothing to click, and still sent when the
+    batch goes. So they are drawn as one block instead.
+    """
+
+    QUOTE = "def greet(name)"
+
+    @classmethod
+    def two(cls, row=8, texts=("who is nome?", "and no argument")):
+        return [placed(row, ident, text,
+                       note={"quote": cls.QUOTE, "rows": [cls.QUOTE]})
+                for ident, text in zip("ab", texts)]
+
+    def test_both_are_on_screen(self, sticky):
+        frame = "\n".join(sticky.build_frame(self.two(), 34, 24))
+        assert "who is nome?" in frame
+        assert "and no argument" in frame
+
+    def test_the_quote_is_said_once(self, sticky):
+        frame = "\n".join(sticky.build_frame(self.two(), 34, 24))
+        assert frame.count(self.QUOTE) == 1, "it is one line, not two"
+
+    def test_each_gets_its_own_button(self, sticky):
+        """Or one of them cannot be struck out, and the row that could is
+        the other note's."""
+        hits = []
+        sticky.build_frame(self.two(), 34, 24, hits=hits)
+        buttons = {h["id"] for h in hits if h["x"] < 10 ** 5}
+        assert buttons == {"a", "b"}, f"a button each: {hits}"
+
+    def test_one_note_is_drawn_as_it_always_was(self, sticky):
+        """The button sits on the quote row when nothing is sharing it."""
+        hits = []
+        sticky.build_frame(self.two(texts=("who is nome?",))[:1], 34, 24,
+                           hits=hits)
+        top = [h for h in hits if h["row"] == 8]
+        assert top and top[0]["x"] < 10 ** 5, "the quote row carries it"
+
+
 class TestTwoRowsOfTabs:
     """Agent tabs on one row, everything else on another.
 
