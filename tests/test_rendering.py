@@ -594,6 +594,15 @@ class TestTwoRowsOfTabs:
         assert hints in agents, "the key hints stay on the first row"
         assert hints not in others, "and not on the second"
 
+    def test_both_rows_start_their_list_in_the_same_column(self, sticky):
+        """Two lists read as one when their left edges agree, and as two
+        ragged ones when they do not - which is most of what having two
+        rows was meant to fix."""
+        assert len(sticky.config.OTHER_LABEL) == len(sticky.config.STICKY_LABEL)
+        assert sticky.config.OTHER_LABEL.strip() == "other"
+        assert sticky.config.STICKY_LABEL in sticky.CONFIG_TEMPLATE.replace(
+            "@LABEL@", sticky.config.STICKY_LABEL), "and the row uses it"
+
     def test_the_separator_goes_inside_the_test(self, sticky):
         """Left where tmux puts it, a skipped tab still lays down the space
         between two tabs and the row reads `1:beta  3:gamma`, with a hole

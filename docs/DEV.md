@@ -1213,7 +1213,10 @@ tells them apart is the mark: sticky gives every agent tab one, `$` is the
 shell's, and a window sticky never opened has none, so `AGENT_TAB` is
 "marked, and not the shell". The second row is labelled `other` rather than
 `shell` for that last case: a window somebody made by hand belongs there
-and is not one.
+and is not one. Its badge is padded to the width of `sticky`'s rather than
+written out, because two lists read as one list when their left edges
+agree and as two ragged ones when they do not - which is most of what
+having two rows was meant to fix.
 
 Both rows are built here rather than left to tmux, because the filtering
 has to happen inside the `#{W:}` loop. Leaving the separator where tmux puts

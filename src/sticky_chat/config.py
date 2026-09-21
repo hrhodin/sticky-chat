@@ -85,6 +85,14 @@ def _row(left: str, tabs: str, right: str) -> str:
             f"#[push-default]{right}#[pop-default]#[norange default]")
 
 
+# The badge at the left of each row, and the reason it is a constant: the
+# two rows have to be the same width or the two tab lists start at
+# different columns, and reading them as one list off a ragged left edge is
+# most of what having two rows was meant to fix.
+STICKY_LABEL = " sticky "
+
+OTHER_LABEL = " other ".ljust(len(STICKY_LABEL))
+
 AGENT_ROW = _row("#{T;=/#{status-left-length}:status-left}", _tabs(True),
                  "#{T;=/#{status-right-length}:status-right}")
 
@@ -94,7 +102,7 @@ AGENT_ROW = _row("#{T;=/#{status-left-length}:status-left}", _tabs(True),
 # because what lands here is everything that is not an agent tab - the
 # shells sticky opened, and any window somebody made in this session by
 # hand, which sticky knows nothing about and should not mislabel.
-OTHER_ROW = _row("#[bold] other #[default] ", _tabs(False), "")
+OTHER_ROW = _row(f"#[bold]{OTHER_LABEL}#[default] ", _tabs(False), "")
 
 # Two rows only while there is a second list to put on one. A row that says
 # "shell" and holds nothing is a line of the terminal spent on saying that
@@ -160,7 +168,7 @@ set -g window-status-style "dim"
 # second row is there only while something is on it - see `rows_needed`.
 set -g status-format[0] "@AGENTROW@"
 set -g status-format[1] "@OTHERROW@"
-set -g status-left "#[bold] sticky #[default] "
+set -g status-left "#[bold]@LABEL@#[default] "
 set -g status-left-length 20
 set -g status-right-length 200
 set -g status-right "#{?@sticky_new,#[reverse] \u2193 #{@sticky_new}#{?#{e|>:#{e|-:#{client_width},#{e|*:#{session_windows},12}},95}, new output rows below, below} #[default]  ,}#[bold]C-g s#[default] send  #[bold]C-g c#[default] new tab  #[bold]C-g n#[default] next  #[bold]C-g w#[default] tabs  #[bold]C-g d#[default] detach  #{?window_bigger,[+#{window_offset_y} rows] ,}"
@@ -396,6 +404,7 @@ def write_config(bin_path: str) -> str:
                  .replace("@HOME@", STATE_HOME)
                  .replace("@ROWS@", str(DEFAULT_VIRTUAL_ROWS))
                  .replace("@TYPING@", typing_keys())
+                 .replace("@LABEL@", STICKY_LABEL)
                  .replace("@AGENTROW@", AGENT_ROW)
                  .replace("@OTHERROW@", OTHER_ROW)
                  .replace("@CLIP@", " ".join(shell_quote(c) for c in clip)))
