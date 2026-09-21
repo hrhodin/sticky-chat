@@ -1206,6 +1206,42 @@ choice is only carried through when it is a change.
 This is what retired `C-g T`. A separate key for the shell was a second way
 to open a tab, and there is no room for two.
 
+Agent tabs and everything else are drawn on two rows of the status line.
+They are two kinds of thing, and one list holding both is a list you read
+twice - once for the tab you meant and once past the tabs you did not. What
+tells them apart is the mark: sticky gives every agent tab one, `$` is the
+shell's, and a window sticky never opened has none, so `AGENT_TAB` is
+"marked, and not the shell". The second row is labelled `other` rather than
+`shell` for that last case: a window somebody made by hand belongs there
+and is not one.
+
+Both rows are built here rather than left to tmux, because the filtering
+has to happen inside the `#{W:}` loop. Leaving the separator where tmux puts
+it - after each entry, outside the test - has every skipped tab still lay
+down the space between two tabs, and the row reads `1:beta  3:gamma` with a
+hole where the shell used to be, which is worse than either list alone. The
+ranges and the alert styles are copied from the stock `status-format[0]`
+rather than invented: a window list that behaved almost like tmux's would be
+worse than one that behaved like nothing.
+
+The second row is there only while something is on it, since a row saying
+`other` and holding nothing is a line of the terminal spent saying there are
+no others. `ROWS_HOOK` is a format and no more - no process is started to
+decide how tall the status line is, which matters because one of the hooks
+it hangs off fires on every change of tab. It is spelt `set -g status on`
+for one row: `status` is a choice option, `1` is refused as an unknown
+value, and a hook has no way of telling you so - it simply leaves the count
+wherever it was. `count_rows` asks once more when a tab is finished, because
+a tab is a window first and an agent tab a beat later when its mark is set,
+and anything asked in between counts every tab as one of the others.
+
+A second row also means the window is a row shorter, and `client_areas` had
+`client_height - 1` written into it with "less the status line" beside it.
+It asks `#{status}` now and reads the answer through `status_height`: `off`
+is none, a number is that many, `on` is one. Getting it wrong is invisible
+until a tall window, where it shows as the bottom line of the agent's output
+sitting under the status bar for ever.
+
 The `shell` profile is what makes this worth having. It is a tab with no
 agent: `$SHELL`, read as the tab opens rather than written down, and no
 session flags, no fork, no discovery, because there is no conversation to

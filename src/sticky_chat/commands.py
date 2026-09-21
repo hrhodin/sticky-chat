@@ -27,6 +27,7 @@ from .config import (
     FOCUS_STYLE,
     client_area,
     fit_windows,
+    count_rows,
     install_hooks,
     pin_clients,
     prime_rows,
@@ -882,6 +883,7 @@ def cmd_fork(args) -> int:
     # against whichever pane is active, and half of a sticky window is
     # the sidebar.
     tm.ok("set-option", "-w", "-t", left, "@sticky_mark", agent.mark)
+    count_rows(tm)      # the tab is an agent tab as of now
     # A branch is a new conversation with a new id, and on an agent that
     # names its own it is exactly the id we do not have - so a fork looks for
     # one the same way a fresh tab does.
@@ -1192,6 +1194,7 @@ def open_tab(tm: Tmux, record: dict, command: str, client: str | None) -> str:
     # against whichever pane is active, and half of a sticky window is
     # the sidebar.
     tm.ok("set-option", "-w", "-t", left, "@sticky_mark", agent.mark)
+    count_rows(tm)      # the tab is an agent tab as of now
     mark_launch(tm, left, agent, launched, record.get("agent_session", ""))
     open_sidebar(tm, self_path(), left, project, width,
                  record.get("store") or None)
@@ -1908,6 +1911,7 @@ def cmd_start(args) -> int:
     # against whichever pane is active, and half of a sticky window is
     # the sidebar.
     tm.ok("set-option", "-w", "-t", left, "@sticky_mark", agent.mark)
+    count_rows(tm)      # the tab is an agent tab as of now
     mark_launch(tm, left, agent, launched)             # and before it, too
     open_sidebar(tm, binary, left, project, args.sidebar_width, store_dir)
     # A bare --continue leaves the id with the agent, so the tab is remembered

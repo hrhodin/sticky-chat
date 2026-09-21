@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -300,6 +301,44 @@ def test_the_new_tab_key_offers_another_agent(
     finally:
         subprocess.run(["tmux", "-L", OUTER, "kill-server"],
                        capture_output=True)
+
+
+def test_a_tab_with_no_agent_is_listed_on_the_other_row(
+        tmux, server, run_sticky, sticky_home, project, close_windows):
+    """Agent tabs on one row and everything else on another.
+
+    The row count itself is a global option and this suite shares one
+    server, whose own window carries no mark and so always wants a second
+    row - so what is checked here is the part that is visible either way:
+    which of the two lists each tab is drawn in.
+    """
+    agent = run_sticky("start", project, "--detach",
+                       "--agent-cmd", fake_claude(project)).strip()
+    close_windows.append(agent)
+    shell = run_sticky("start", project, "--detach",
+                       "--agent", "shell").strip()
+    close_windows.append(shell)
+    # The server has been up since the first test in the suite and is still
+    # running the config it was handed then; the rows live in that file.
+    tmux("source-file", str(Path(sticky_home) / "tmux.conf"))
+    time.sleep(1.0)
+
+    def row(n, where):
+        drawn = tmux("display-message", "-p", "-t", where,
+                     f"#{{T:status-format[{n}]}}")
+        return re.sub(r"#\[[^]]*\]", "", drawn)
+
+    names = {}
+    for pane in (agent, shell):
+        names[pane] = tmux("display-message", "-p", "-t", pane,
+                           "#{window_index}:#{window_name}").strip()
+
+    agents, others = row(0, agent), row(1, agent)
+    assert names[agent] in agents, f"the agent tab is on row 0: {agents!r}"
+    assert names[agent] not in others, "and only there"
+    assert names[shell] in others, f"the shell tab is on row 1: {others!r}"
+    assert names[shell] not in agents, "and only there"
+    assert " other " in others, "which says what it holds"
 
 
 def test_leaving_claude_takes_the_tab_with_it(
@@ -1230,7 +1269,7 @@ class TestVirtualRows:
     taller than the terminal and tmux pans a viewport over it."""
 
     @pytest.fixture(scope="class")
-    def tall(self, tmux, run_sticky, class_project, class_windows,
+    def tall(self, sticky, tmux, run_sticky, class_project, class_windows,
              attached_client):
         project, close_windows = class_project, class_windows
         body = ("i=1; while [ $i -le 60 ]; do printf '  body-%02d\\n' $i; "
@@ -1246,11 +1285,14 @@ class TestVirtualRows:
         time.sleep(1.2)
         fields = tmux("display-message", "-p", "-t", pane,
                       "#{window_height}\t#{window_bigger}\t#{window_offset_y}"
-                      "\t#{cursor_y}\t#{client_height}").strip().split("\t")
+                      "\t#{cursor_y}\t#{client_height}\t#{status}"
+                      ).strip().split("\t")
         return {"pane": pane, "project": project,
                 "height": int(fields[0]), "bigger": fields[1],
                 "offset": int(fields[2]), "cursor": int(fields[3]),
-                "area": int(fields[4]) - 1}       # less the status line
+                # Less the status line, however many rows it is taking:
+                # the tab lists split onto two when a tab has no agent.
+                "area": int(fields[4]) - sticky.status_height(fields[5])}
 
     def test_the_window_is_taller_than_the_client(self, tall):
         assert tall["height"] == 200

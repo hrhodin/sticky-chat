@@ -110,6 +110,7 @@ from .config import (
     FOCUS_STYLE,
     RESERVED_IN_COPY_MODE,
     client_area,
+    status_height,
     client_areas,
     default_virtual_rows,
     fit_windows,

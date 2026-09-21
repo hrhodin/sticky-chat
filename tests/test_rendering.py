@@ -567,6 +567,43 @@ class TestTheFooterSaysWhenABatchIsDue:
         assert "at " in said, f"a clock, not a duration: {said!r}"
 
 
+class TestTwoRowsOfTabs:
+    """Agent tabs on one row, everything else on another.
+
+    They are two kinds of thing, and one list holding both is a list you
+    read twice - once for the tab you meant and once past the tabs you did
+    not. What tells them apart is the mark: sticky gives every agent tab
+    one, `$` is the shell's, and a window sticky never opened has none.
+    """
+
+    def test_the_second_row_is_spelt_the_way_tmux_spells_it(self, sticky):
+        """`status` is a choice, and one row is `on`. `set -g status 1` is
+        refused as an unknown value - which a hook cannot tell you, so it
+        simply leaves the row count wherever it happened to be."""
+        assert '"set -g status on"' in sticky.config.ROWS_HOOK
+        assert '"set -g status 2"' in sticky.config.ROWS_HOOK
+        assert " 1\"" not in sticky.config.ROWS_HOOK
+
+    def test_each_row_asks_for_the_half_it_draws(self, sticky):
+        agents = sticky.config.AGENT_ROW
+        others = sticky.config.OTHER_ROW
+        assert sticky.config.AGENT_TAB in agents and sticky.config.AGENT_TAB in others
+        assert "window-status-current-format" in agents, "the current tab too"
+        assert "range=window" in agents, "and still clickable"
+        hints = "#{T;=/#{status-right-length}:status-right}"
+        assert hints in agents, "the key hints stay on the first row"
+        assert hints not in others, "and not on the second"
+
+    def test_the_separator_goes_inside_the_test(self, sticky):
+        """Left where tmux puts it, a skipped tab still lays down the space
+        between two tabs and the row reads `1:beta  3:gamma`, with a hole
+        where the shell used to be."""
+        row = sticky.config.AGENT_ROW
+        gap = "#{E:window-status-separator}"
+        assert gap in row
+        assert f"{gap},}}" in row, "inside the conditional, not after it"
+
+
 class TestTheSidebarSaysWhatIsAboutToHappen:
     """The countdown, which is the half of a clock that is read now.
 
