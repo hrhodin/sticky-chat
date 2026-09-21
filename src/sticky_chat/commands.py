@@ -1567,6 +1567,36 @@ def cmd_reopen(args) -> int:
                   args.client)
 
 
+def cmd_log(args) -> int:
+    """Turn the sidebar's log on or off, or say where it is going.
+
+    A tab that marks itself unread when nothing happened is a thing you can
+    only catch in the act: the answer is always "what changed on screen",
+    and the screen has moved on by the time anybody asks. So the sidebars
+    keep a diff of every change they act on, and the switch is a global
+    option they read out of the query they were making anyway - which is
+    why this takes effect at once and does not want a reload.
+    """
+    tm = Tmux(args.socket)
+    if not tm.server_running():
+        die("no sticky session; run: sticky-chat start")
+    if args.off:
+        tm.ok("set-option", "-gu", "@sticky_log")
+        print("sticky: log off")
+        return 0
+    if not args.path:
+        where = tm.run("show-options", "-gqv", "@sticky_log").strip()
+        print(f"sticky: log going to {where}" if where else "sticky: log off")
+        return 0
+    path = os.path.abspath(os.path.expanduser(args.path))
+    directory = os.path.dirname(path) or "."
+    if not os.path.isdir(directory):
+        die(f"not a directory: {directory}")
+    tm.ok("set-option", "-g", "@sticky_log", path)
+    print(f"sticky: log going to {path}")
+    return 0
+
+
 def cmd_reload(args) -> int:
     """Re-apply everything sticky owns to a session that is already running.
 

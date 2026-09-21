@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import difflib
 import os
 import select
 import signal
@@ -86,6 +87,42 @@ CONTINUE_GRACE = 240.0
 CONTINUE_TRIES = 3
 
 CONTINUE_WORD = "continue"
+
+
+# How much of a diff is worth keeping when the log is on. A whole screen
+# would be most of the answer buried in all of the question.
+LOG_ROWS = 40
+
+
+def to_log(path: str, pane: str, size: str, what: str,
+           before: list[str] | None = None,
+           after: list[str] | None = None) -> None:
+    """Append what the sidebar just decided, and the rows behind it.
+
+    Off unless `@sticky_log` names a file, and read out of the per-pass
+    query that runs anyway, so it can be turned on while everything is
+    running and costs nothing at all while it is off. A tab that marks
+    itself unread when nothing happened is the thing this is for: the
+    answer is always "what changed on screen", and that is not a question
+    anybody can answer afterwards from a pane that has since moved on.
+    """
+    try:
+        with open(path, "a") as fh:
+            stamp = time.strftime("%Y-%m-%d %H:%M:%S")
+            fh.write(f"{stamp} {pane} {size} {what}\n")
+            if before is None or after is None:
+                return
+            shown = 0
+            for line in difflib.unified_diff(before, after, lineterm="", n=0):
+                if line.startswith(("---", "+++")):
+                    continue
+                if shown >= LOG_ROWS:
+                    fh.write("    ... and more\n")
+                    break
+                fh.write(f"    {line}\n")
+                shown += 1
+    except OSError:
+        pass                            # a log nobody can write is not a fault
 
 
 # ------------------------------------------------------------------ drawing
@@ -755,6 +792,7 @@ def cmd_sidebar(args) -> int:
     printed_at = time.monotonic()      # when the agent last said anything
     last_screen = None                 # ... and what it looked like then
     settled = False                    # ... and whether any of it was news
+    woke = time.time()                 # when a pass last ran, by the wall
     said_done = False                  # ... and whether its tab has been told
     # Counted on the pane, so a sidebar restarted by `reload` does not hand
     # an agent three more attempts than it was given.
@@ -781,7 +819,8 @@ def cmd_sidebar(args) -> int:
                     # a tmux call costs.
                     alive, raw, view = tm.formats(
                         (pane, "#{pane_id}\t#{pane_in_mode}\t#{window_active}"
-                         "\t#{@sticky_send_at}\t#{@sticky_send_at_off}"),
+                         "\t#{@sticky_send_at}\t#{@sticky_send_at_off}"
+                         "\t#{@sticky_log}\t#{pane_width}x#{pane_height}"),
                         (self_pane, "#{pane_in_mode}\t#{window_offset_y}"),
                         (pane, VIEW_FORMAT))
                     mode, _, offset = raw.partition("\t")
@@ -789,7 +828,8 @@ def cmd_sidebar(args) -> int:
                 else:
                     alive, view = tm.formats(
                         (pane, "#{pane_id}\t#{pane_in_mode}\t#{window_active}"
-                         "\t#{@sticky_send_at}\t#{@sticky_send_at_off}"),
+                         "\t#{@sticky_send_at}\t#{@sticky_send_at_off}"
+                         "\t#{@sticky_log}\t#{pane_width}x#{pane_height}"),
                         (pane, VIEW_FORMAT))
             except RuntimeError:
                 break              # before 3.8, asking about a gone pane errors
@@ -797,6 +837,9 @@ def cmd_sidebar(args) -> int:
             reading, _, looking = reading.partition("\t")
             looking, _, due = looking.partition("\t")
             due, _, stood = due.partition("\t")
+            stood, _, logging = stood.partition("\t")
+            logging, _, size = logging.partition("\t")
+            logging, size = logging.strip(), size.strip()
             # `<when>:<tab>:<what>`. With nothing to say it is the pending
             # notes that go; with a word, that word - the two want the same
             # clock, the same footer and the same way of being called off.
@@ -900,7 +943,23 @@ def cmd_sidebar(args) -> int:
                 # started. Comparing the text is the only way to tell,
                 # and it is free here: the capture had to be taken anyway.
                 screen = "\n".join(visible)
+                if logging:
+                    # A pass that arrives long after the one before it was
+                    # not waiting - the machine was asleep, or this process
+                    # was stopped. Worth saying out loud, because what
+                    # follows a wake is exactly what is under suspicion.
+                    gap = time.time() - woke
+                    if gap > max(idle, SIDEBAR_IDLE) * 2 + 5:
+                        to_log(logging, pane, size,
+                               f"back after {gap:.0f}s away")
+                    woke = time.time()
                 if screen != last_screen:
+                    if logging:
+                        to_log(logging, pane, size,
+                               "first look" if last_screen is None
+                               else "the screen changed",
+                               (last_screen or "").split("\n"),
+                               screen.split("\n"))
                     # The first look is the baseline, not news. It still
                     # starts the clock, because a limit notice already on
                     # screen is the whole point of examining the first
@@ -1040,6 +1099,10 @@ def cmd_sidebar(args) -> int:
                         # mention the thing it is waiting for.
                         last_sig = None
                         settle_at = time.monotonic() + SIDEBAR_SETTLE
+                        if logging:
+                            to_log(logging, pane, size,
+                                   f"armed for {said} (try {tries}), off: "
+                                   f"{saw[:80]!r}")
                     elif not when:
                         if ours:
                             # The turn the clock itself asked for. That it
@@ -1060,6 +1123,8 @@ def cmd_sidebar(args) -> int:
                 if not said_done and not watching and settled:
                     tm.ok("set-option", "-w", "-t", pane, "@sticky_done", "1")
                     said_done = True
+                    if logging:
+                        to_log(logging, pane, size, "marked unread")
                 printed_at = 0.0
             if said_done and watching:
                 # Come back to the end of it, and the question is answered.
@@ -1067,6 +1132,8 @@ def cmd_sidebar(args) -> int:
                 # no pane took focus - the scroll simply ended.
                 tm.ok("set-option", "-w", "-u", "-t", pane, "@sticky_done")
                 said_done = False
+                if logging:
+                    to_log(logging, pane, size, "mark cleared: you came back")
 
             # A batch with a time on it. The clock is the sidebar's to
             # watch because it is the only part of sticky that is awake

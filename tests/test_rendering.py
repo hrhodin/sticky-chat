@@ -567,6 +567,41 @@ class TestTheFooterSaysWhenABatchIsDue:
         assert "at " in said, f"a clock, not a duration: {said!r}"
 
 
+class TestTheLog:
+    """What the sidebar decided, and the rows behind it.
+
+    A tab that marks itself unread when nothing happened can only be caught
+    in the act: the answer is always "what changed on screen", and the
+    screen has moved on by the time anybody thinks to ask.
+    """
+
+    def test_it_writes_the_diff_and_not_the_whole_screen(self, sticky, tmp_path):
+        path = str(tmp_path / "sticky.log")
+        before = [f"row {n}" for n in range(200)]
+        after = list(before)
+        after[5] = "row five, changed"
+        sticky.to_log(path, "%1", "80x24", "the screen changed", before, after)
+        written = open(path).read()
+        assert "the screen changed" in written
+        assert "+row five, changed" in written
+        assert "-row 5" in written, "and what it was before"
+        assert "row 100" not in written, "unchanged rows are not the answer"
+
+    def test_a_long_diff_is_cut_off(self, sticky, tmp_path):
+        path = str(tmp_path / "sticky.log")
+        before = [f"row {n}" for n in range(500)]
+        sticky.to_log(path, "%1", "80x24", "everything", before,
+                      [f"changed {n}" for n in range(500)])
+        assert "... and more" in open(path).read()
+        assert len(open(path).read().splitlines()) < sticky.LOG_ROWS + 5
+
+    def test_a_log_nobody_can_write_is_not_a_fault(self, sticky, tmp_path):
+        """It is a debugging aid. Taking the sidebar down with it would be
+        the tail wagging the dog."""
+        sticky.to_log(str(tmp_path / "no" / "such" / "dir" / "x.log"),
+                      "%1", "80x24", "anything")
+
+
 class TestTwoNotesOnOneLine:
     """The same line marked twice is one quote with two things to say.
 

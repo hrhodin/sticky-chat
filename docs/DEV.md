@@ -231,6 +231,17 @@ life, because no hook can say "the transcript has been written now"; see
 | Claude ended | `pane-exited` → `cmd_sweep` closes the sidebar outright |
 | you pressed a key | the key itself |
 
+`sticky log <file>` records what each sidebar decided and the diff behind
+it. A tab that marks itself unread when nothing happened can only be caught
+in the act - the answer is always "what changed on screen", and the screen
+has moved on by the time anybody thinks to ask - so the log carries the
+rows, the pane's size, and a line of its own when a pass arrives long after
+the one before it, which is what a machine waking from sleep looks like
+from in here. The switch is a global option read out of the per-pass query
+that runs anyway: nothing is asked for while it is off, and turning it on
+does not want a reload, which matters when the thing worth catching happens
+once a day.
+
 A wake is a reason to go and look, and nothing more. tmux fires
 `pane-activity` for every byte an agent writes, and an agent redrawing
 its own input box writes a great many that leave the screen exactly as

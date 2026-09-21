@@ -345,6 +345,39 @@ def test_a_tab_with_no_agent_is_listed_on_the_other_row(
     assert " other " in others, "which says what it holds"
 
 
+def test_the_log_can_be_turned_on_while_everything_runs(
+        tmux, server, run_sticky, project, tmp_path, close_windows):
+    """The switch is a global option the sidebars read out of the query
+    they were making anyway, so it takes effect at once - which matters,
+    because the thing worth catching happens once a day and a reload would
+    be the last thing you did before it did not happen again."""
+    pane = run_sticky("start", project, "--detach", "--agent", "generic",
+                      "--agent-cmd", "cat").strip()
+    close_windows.append(pane)
+    time.sleep(0.8)
+
+    path = tmp_path / "sticky.log"
+    run_sticky("log", str(path))
+    assert str(path) in run_sticky("log"), "and it says where it is going"
+
+    tmux("send-keys", "-t", pane, "something new", "Enter")
+    deadline = time.time() + 12
+    while time.time() < deadline:
+        if path.exists() and "something new" in path.read_text():
+            break
+        time.sleep(0.2)
+    written = path.read_text() if path.exists() else ""
+    assert "the screen changed" in written, f"nothing recorded: {written!r}"
+    assert "+something new" in written, "with the rows behind it"
+
+    run_sticky("log", "--off")
+    assert "off" in run_sticky("log")
+    was = path.read_text()
+    tmux("send-keys", "-t", pane, "and more", "Enter")
+    time.sleep(4)
+    assert path.read_text() == was, "off is off"
+
+
 def test_leaving_claude_takes_the_tab_with_it(
         tmux, server, run_sticky, project, close_windows):
     """Once Claude has gone the sidebar has nothing left to annotate.

@@ -145,6 +145,10 @@ waiting to be read - it printed something and then went quiet, which is
 the only definition of "finished" that holds for every agent - and looking
 at the tab clears it.
 
+If a tab marks itself and you cannot see why, `sticky log <file>` records
+what each sidebar decided and the rows that changed to make it decide that.
+It takes effect at once, needs no reload, and `sticky log --off` stops it.
+
 Tabs with no agent in them - shells, and any window you made in this session
 yourself - get a row of their own beneath, labelled `other`. It is there
 only while something is on it, so a session of nothing but agent tabs has

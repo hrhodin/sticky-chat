@@ -21,6 +21,7 @@ from .commands import (
     cmd_note,
     cmd_place,
     cmd_quit,
+    cmd_log,
     cmd_reload,
     cmd_reopen,
     cmd_restore,
@@ -136,6 +137,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--from", dest="source_pane",
                    help="pane the picker opens beside")
     p.set_defaults(func=cmd_reopen)
+
+    p = sub.add_parser(
+        "log", help="record what the sidebars decide, and why")
+    p.add_argument("path", nargs="?", help="file to append to")
+    p.add_argument("--off", action="store_true", help="stop recording")
+    p.add_argument("--socket")
+    p.set_defaults(func=cmd_log)
 
     p = sub.add_parser(
         "reload", help="re-apply the config and restart the sidebars")
