@@ -26,7 +26,7 @@ from __future__ import annotations
 # ended up in.
 # ruff: noqa: F401
 
-__version__ = "0.1.2"
+__version__ = "0.2.0"
 
 from .agents import (
     AGENTS,
@@ -60,7 +60,6 @@ from .commands import (
     ask,
     ask_project,
     ask_when,
-    mark_pattern,
     attach,
     cmd_add,
     cmd_attach,
@@ -79,17 +78,18 @@ from .commands import (
     cmd_resume,
     cmd_rm,
     cmd_start,
-    cmd_trace,
     cmd_sweep,
+    cmd_trace,
     cmd_uncommit,
     column,
     comes_back,
     dismissing,
-    forget_window,
     expand_paste,
+    forget_window,
     jump_to_note,
     leave_copy_mode,
     mark_launch,
+    mark_pattern,
     not_showing,
     nudge,
     open_project_prompt,
@@ -117,10 +117,9 @@ from .config import (
     EXIT_HOOK,
     FOCUS_STYLE,
     HAS_OTHERS,
-    ROWS_HOOK,
     RESERVED_IN_COPY_MODE,
+    ROWS_HOOK,
     client_area,
-    status_height,
     client_areas,
     default_virtual_rows,
     fit_windows,
@@ -128,8 +127,9 @@ from .config import (
     pin_clients,
     prime_rows,
     room_for_new_windows,
-    use_client_size,
+    status_height,
     typing_keys,
+    use_client_size,
     virtual_window,
     write_config,
 )
@@ -150,11 +150,11 @@ from .placement import (
     in_prompt_box,
     note_candidates,
     pane_view,
-    screen_words,
     parse_view,
     place_note,
     placements,
     resolve,
+    screen_words,
 )
 from .sidebar import (
     BAND_SHARE,
@@ -162,6 +162,7 @@ from .sidebar import (
     DISCOVER_EVERY,
     DISCOVER_WINDOW,
     HELP_SECTIONS,
+    LOG_ROWS,
     SIDEBAR_BUSY,
     SIDEBAR_FROZEN_TICK,
     SIDEBAR_IDLE,
@@ -176,15 +177,14 @@ from .sidebar import (
     draw,
     due_line,
     foot_lines,
-    history_order,
     footer_text,
-    to_log,
-    typing_through,
-    how_long,
-    LOG_ROWS,
     help_sections,
+    history_order,
+    how_long,
     note_bullet,
     note_style,
+    to_log,
+    typing_through,
     with_close,
 )
 from .store import (
@@ -215,10 +215,10 @@ from .store import (
 )
 from .tmux import DEFAULT_SOCKET, SESSION_NAME, Tmux
 from .util import (
-    CLOCK_HIT,
     ANSI,
     ARROWS,
     BOLD,
+    CLOCK_HIT,
     COL_COMMITTED,
     COL_FOOTER,
     COL_FUZZY,
@@ -234,12 +234,12 @@ from .util import (
     die,
     dwidth,
     lay_out,
+    log_line,
     prompt_line,
     read_key,
     reset_notice,
     reset_time,
     row_step,
-    log_line,
     self_path,
     shell_quote,
     terminal_size,

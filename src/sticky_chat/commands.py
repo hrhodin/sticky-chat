@@ -27,8 +27,8 @@ from .config import (
     DEFAULT_SIDEBAR_WIDTH,
     FOCUS_STYLE,
     client_area,
-    fit_windows,
     count_rows,
+    fit_windows,
     install_hooks,
     pin_clients,
     prime_rows,
@@ -67,9 +67,8 @@ from .store import (
 )
 from .tmux import SESSION_NAME, Tmux
 from .util import (
-    log_line,
-    CLOCK_HIT,
     BOLD,
+    CLOCK_HIT,
     COL_COMMITTED,
     COL_PENDING,
     DIM,
@@ -77,6 +76,7 @@ from .util import (
     RESET_ROWS,
     complete_path,
     die,
+    log_line,
     prompt_line,
     reset_time,
     self_path,

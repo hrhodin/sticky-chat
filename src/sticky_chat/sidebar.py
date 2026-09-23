@@ -15,9 +15,8 @@ from .placement import VIEW_FORMAT, pane_view, parse_view, resolve
 from .store import agent_of, open_store, record_window, resolve_project
 from .tmux import Tmux
 from .util import (
-    CLOCK_HIT,
-    log_line,
     BOLD,
+    CLOCK_HIT,
     COL_COMMITTED,
     COL_FOOTER,
     COL_PENDING,
@@ -28,6 +27,7 @@ from .util import (
     STATUS_COLOR,
     STRIKE,
     die,
+    log_line,
     read_key,
     reset_notice,
     self_path,

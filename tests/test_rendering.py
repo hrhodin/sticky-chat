@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-
 import re
 
 import pytest
@@ -12,6 +11,12 @@ STRIKE = "\x1b[9m"
 REVERSE = "\x1b[7m"
 BOLD = "\x1b[1m"
 DIM = "\x1b[2m"
+
+
+def written(path: str) -> str:
+    """What a log file holds, read the once."""
+    with open(path) as fh:
+        return fh.read()
 
 
 def plain(line: str) -> str:
@@ -695,27 +700,27 @@ class TestTheLog:
         after = list(before)
         after[5] = "row five, changed"
         sticky.to_log(path, "%1", "80x24", "the screen changed", before, after)
-        written = open(path).read()
-        assert "the screen changed" in written
-        assert "+row five, changed" in written
-        assert "-row 5" in written, "and what it was before"
-        assert "row 100" not in written, "unchanged rows are not the answer"
+        said = written(path)
+        assert "the screen changed" in said
+        assert "+row five, changed" in said
+        assert "-row 5" in said, "and what it was before"
+        assert "row 100" not in said, "unchanged rows are not the answer"
 
     def test_a_long_diff_is_cut_off(self, sticky, tmp_path):
         path = str(tmp_path / "sticky.log")
         before = [f"row {n}" for n in range(500)]
         sticky.to_log(path, "%1", "80x24", "everything", before,
                       [f"changed {n}" for n in range(500)])
-        assert "... and more" in open(path).read()
-        assert len(open(path).read().splitlines()) < sticky.LOG_ROWS + 5
+        assert "... and more" in written(path)
+        assert len(written(path).splitlines()) < sticky.LOG_ROWS + 5
 
     def test_every_line_carries_the_milliseconds(self, sticky, tmp_path):
         """What the log is for is the order things happened in and the gaps
         between them, and the gaps worth chasing are under a second."""
         path = str(tmp_path / "sticky.log")
         sticky.log_line(path, "clicked tab 7")
-        written = open(path).read().strip()
-        assert re.match(r"^\d\d:\d\d:\d\d\.\d\d\d clicked tab 7$", written), written
+        said = written(path).strip()
+        assert re.match(r"^\d\d:\d\d:\d\d\.\d\d\d clicked tab 7$", said), said
 
     def test_a_mark_from_a_key_binding_joins_the_same_timeline(
             self, sticky, tmp_path, monkeypatch):
@@ -733,7 +738,7 @@ class TestTheLog:
         monkeypatch.setattr(sticky.commands, "Tmux", FakeTmux)
         args = argparse.Namespace(socket=None, label="clicked tab 7")
         assert sticky.cmd_trace(args) == 0
-        assert "-- clicked tab 7" in open(path).read()
+        assert "-- clicked tab 7" in written(path)
 
     def test_nothing_is_written_while_the_log_is_off(
             self, sticky, tmp_path, monkeypatch):

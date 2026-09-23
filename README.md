@@ -254,6 +254,14 @@ mode copies the live selection again, wherever you are, and leaves it
 highlighted, and Ctrl-C in the note prompt copies and closes without
 saving anything.
 
+Scrolled back, the lines you have already annotated are lit. Copy mode is
+the one place tmux will paint over a pane's own output — it colours the
+matches of a search — so entering it sets the search to what your newest
+notes quote. Quiet on purpose: it is there to be recognised out of the
+corner of an eye rather than read. Only the eight most recent, and only
+their first forty characters, because that search runs inside the tmux
+server and every pane waits while it does.
+
 Inside the sidebar the letters work on their own, without the prefix:
 
 | key | what it does |
@@ -272,6 +280,7 @@ Inside the sidebar the letters work on their own, without the prefix:
 | `r` | re-read the notes file |
 | `?` or `h` | the help panel; any key goes back |
 | `q` | close the sidebar |
+| any other letter | goes to the chat pane, which takes the focus with it — start typing a message with your eye on the notes |
 
 The list scrolls to follow the cursor; the wheel pans it freely and the
 next arrow key snaps the cursor back. Striking out is reversible, and
@@ -331,9 +340,10 @@ back the map is frozen, so nothing moves under you.
 | `sticky-chat add --note "…"` | make a note from text on stdin |
 | `sticky-chat rm <id>` | delete one note |
 | `sticky-chat clear [--committed]` | delete every note, or only the sent ones |
+| `sticky-chat log [file]` / `--off` | record what the sidebars decide, and why; `log` alone says where it is going |
 
-`note`, `sidebar`, `click`, `place` and `fit` also exist, driven by the key
-bindings and tmux hooks rather than typed by hand. With no subcommand,
+`note`, `sidebar`, `click`, `place`, `fit`, `marks` and `trace` also exist,
+driven by the key bindings and tmux hooks rather than typed by hand. With no subcommand,
 `sticky-chat` joins the session already running, or starts one in the
 current directory.
 
@@ -430,10 +440,11 @@ The set is named and taken as a set, the way it went away:
 
 ```
 sticky: 3 tabs were open 7h ago: sticky-chat, notes-api and 1 more. Reopen
-them, or p to go through them? [y/n/p]
+them, or p to go through them one at a time? [y/n/p]
 ```
 
-`p` asks about each one in turn — `y`, `n`, `a` for the rest, `q` to stop.
+`p` asks about each one in turn, and says what its letters do before it
+starts — `y` reopens it, `n` skips it, `a` reopens all the rest, `q` stops.
 `--yes` asks nothing, which is what a login item would use. Running
 `sticky-chat` with nothing running offers the same set in one line.
 

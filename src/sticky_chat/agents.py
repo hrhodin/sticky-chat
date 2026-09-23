@@ -468,7 +468,7 @@ def require_agent(name: str | None) -> Agent:
     return found
 
 
-def installed_agents() -> list["Agent"]:
+def installed_agents() -> list[Agent]:
     """The profiles whose command this machine actually has.
 
     Offering a tab in an agent that is not installed is offering a tab that
