@@ -1432,22 +1432,27 @@ class TestAnotherAgent:
 
     def test_resume_puts_the_tab_back_without_inventing_a_flag(
             self, tmux, run_sticky, plain, tmp_path_factory, close_windows):
-        """Its own STICKY_HOME, so `resume --all` takes this one record.
+        """Its own STICKY_HOME, so `resume --yes` takes this one record.
 
         The tab comes back - project, notes, sidebar - and the command line
         it comes back on is the one it went away on, with no --resume that
         the agent would have refused.
+
+        A store of its own, because resume leaves out a record whose notes
+        are already on a sidebar somewhere: `plain` is a tab that is still
+        up, and reopening its store would be a second tab on it.
         """
         home = tmp_path_factory.mktemp("resume-home")
         (home / "windows").mkdir()
         command = fake_claude(plain["project"])
         (home / "windows" / "tab-generic.json").write_text(json.dumps({
             "session": "tab-generic", "project": plain["project"],
-            "command": command, "store": plain["store"], "agent": "generic",
+            "command": command, "store": str(home / "store"),
+            "agent": "generic",
             "continued": True, "name": "resumed-generic",
             "last_seen": time.time(), "created": time.time()}))
 
-        said = run_sticky("resume", "--all", "--detach", home=home)
+        said = run_sticky("resume", "--yes", "--detach", home=home)
         assert "the conversation starts fresh" in said
         rows = [line.split("\t") for line in tmux(
             "list-panes", "-a", "-F", "#{pane_id}\t#{window_name}\t"

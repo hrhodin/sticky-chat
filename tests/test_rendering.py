@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import argparse
+
 import re
 
 import pytest
@@ -309,6 +311,49 @@ class TestTheBandBelow:
         assert "later note 0" not in "\n".join(frame)
 
 
+class TestNotesFromAPaneThatHasGone:
+    """A resumed or reopened tab is full of notes whose rows were counted in
+    a pane that no longer exists.
+
+    `abs_line` counts from the top of one pane's scrollback, and the panes
+    that came before had been running all day - so their numbers are the
+    largest in the store. Sorted in with the rest they take the end of the
+    list, which is the end the band shows, and the note you just took is
+    nowhere to be seen.
+    """
+
+    def rows(self):
+        gone = [placed(None, f"gone{i}", f"last time {i}", match="offscreen",
+                       where="above", here=False,
+                       note={"abs_line": 14000 + i}) for i in range(10)]
+        here = [placed(None, f"here{i}", f"just now {i}", match="offscreen",
+                       where="above", here=True,
+                       note={"abs_line": 100 + i}) for i in range(2)]
+        return gone + here
+
+    def test_the_note_just_taken_is_the_one_at_the_bottom(self, sticky):
+        lines = [plain(line) for line in
+                 sticky.build_frame(self.rows(), 34, 30)]
+        listed = [line for line in lines
+                  if "just now" in line or "last time" in line]
+        assert listed, lines
+        assert "just now 1" in listed[-1], listed
+
+    def test_they_sort_above_everything_taken_here(self, sticky):
+        order = [item["id"] for item in sticky.history_order(self.rows())]
+        assert order[-2:] == ["here0", "here1"]
+        assert order[0].startswith("gone")
+
+    def test_a_note_with_no_answer_either_way_keeps_its_place(self, sticky):
+        """Nothing says `here` in a frame built by hand, or by an older
+        sidebar: that has to go on meaning what it meant."""
+        rows = [placed(None, "a", "a", match="offscreen", where="above",
+                       note={"abs_line": 9}),
+                placed(None, "b", "b", match="offscreen", where="above",
+                       note={"abs_line": 4})]
+        assert [p["id"] for p in sticky.history_order(rows)] == ["b", "a"]
+
+
 class TestLayingOutTheLine:
     """The note prompt breaks its own rows rather than letting the terminal.
 
@@ -567,6 +612,67 @@ class TestTheFooterSaysWhenABatchIsDue:
         assert "at " in said, f"a clock, not a duration: {said!r}"
 
 
+class TestLightingTheAnnotatedLines:
+    """tmux will not restyle a pane that is being written to - but a pane
+    you have scrolled back in is in copy mode, and copy mode paints the
+    matches of a search. So the search is set for you on the way in."""
+
+    def test_it_matches_the_row_and_not_the_selection(self, sticky):
+        """The quote is what you dragged over, which may be half a line,
+        and half a line lit reads as a mistake."""
+        pattern = sticky.mark_pattern(
+            [{"rows": ["def greet(name): print(nome)"], "quote": "nome"}])
+        assert pattern == r"def greet\(name\): print\(nome\)"
+
+    def test_every_note_goes_in_one_search(self, sticky):
+        pattern = sticky.mark_pattern([{"rows": ["first line here"]},
+                                       {"rows": ["second line here"]}])
+        assert pattern == "first line here|second line here"
+
+    def test_the_same_line_twice_is_one_alternative(self, sticky):
+        pattern = sticky.mark_pattern([{"rows": ["marked line"]},
+                                       {"rows": ["marked line"]}])
+        assert pattern == "marked line"
+
+    def test_a_struck_out_note_lights_nothing(self, sticky):
+        assert not sticky.mark_pattern(
+            [{"rows": ["gone now"], "deleted": True}])
+
+    def test_a_scrap_of_a_line_is_left_alone(self, sticky):
+        """Two letters are matched all over a pane, and lighting up rows
+        nobody annotated is worse than lighting up none."""
+        assert not sticky.mark_pattern([{"rows": ["ab"]}])
+
+    def test_it_does_not_grow_without_end(self, sticky):
+        """A regular expression the width of a hundred notes is one tmux
+        runs against every row it draws."""
+        many = [{"rows": [f"row number {n} of many"]} for n in range(200)]
+        assert (sticky.mark_pattern(many).count("|") + 1
+                == sticky.MARK_QUOTES)
+
+
+class TestTypingInTheNotesPane:
+    """A letter the sidebar has no use for is not an error to swallow: it
+    is the first letter of a sentence, typed with the eye on the notes. It
+    crosses to the chat and arrives there - the same bargain the transcript
+    makes when you type while scrolled back."""
+
+    def test_an_ordinary_character_goes_to_the_agent(self, sticky):
+        for key in ("e", "A", ".", "0", "\u20ac"):
+            assert sticky.typing_through(key), key
+
+    def test_the_sidebar_keeps_the_keys_it_answers_to(self, sticky):
+        for key in "qrhgG?><xFuSst123456789 ":
+            assert not sticky.typing_through(key), key
+
+    def test_moving_about_is_not_a_sentence(self, sticky):
+        """The arrows, the page keys and the wheel are how you get around
+        in here, and a control code is nobody's first letter."""
+        for key in ("up", "down", "pgup", "pgdn", "home", "end", "esc",
+                    "\r", "\n", "\t", "\x03", "\x19", "\x05"):
+            assert not sticky.typing_through(key), key
+
+
 class TestTheLog:
     """What the sidebar decided, and the rows behind it.
 
@@ -594,6 +700,46 @@ class TestTheLog:
                       [f"changed {n}" for n in range(500)])
         assert "... and more" in open(path).read()
         assert len(open(path).read().splitlines()) < sticky.LOG_ROWS + 5
+
+    def test_every_line_carries_the_milliseconds(self, sticky, tmp_path):
+        """What the log is for is the order things happened in and the gaps
+        between them, and the gaps worth chasing are under a second."""
+        path = str(tmp_path / "sticky.log")
+        sticky.log_line(path, "clicked tab 7")
+        written = open(path).read().strip()
+        assert re.match(r"^\d\d:\d\d:\d\d\.\d\d\d clicked tab 7$", written), written
+
+    def test_a_mark_from_a_key_binding_joins_the_same_timeline(
+            self, sticky, tmp_path, monkeypatch):
+        """The click, the hooks it sets off and every sidebar that woke up
+        are one story, so they go in one file."""
+        path = str(tmp_path / "sticky.log")
+
+        class FakeTmux:
+            def __init__(self, socket):
+                self.socket = socket
+
+            def run(self, *args):
+                return path if args[-1] == "@sticky_log" else ""
+
+        monkeypatch.setattr(sticky.commands, "Tmux", FakeTmux)
+        args = argparse.Namespace(socket=None, label="clicked tab 7")
+        assert sticky.cmd_trace(args) == 0
+        assert "-- clicked tab 7" in open(path).read()
+
+    def test_nothing_is_written_while_the_log_is_off(
+            self, sticky, tmp_path, monkeypatch):
+        class FakeTmux:
+            def __init__(self, socket):
+                self.socket = socket
+
+            def run(self, *args):
+                return ""
+
+        monkeypatch.setattr(sticky.commands, "Tmux", FakeTmux)
+        assert sticky.cmd_trace(
+            argparse.Namespace(socket=None, label="x")) == 0
+        assert not list(tmp_path.iterdir())
 
     def test_a_log_nobody_can_write_is_not_a_fault(self, sticky, tmp_path):
         """It is a debugging aid. Taking the sidebar down with it would be

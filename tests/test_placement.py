@@ -100,6 +100,73 @@ def test_a_row_remembered_in_another_pane_is_no_position_at_all(sticky):
         "a note from another pane is out of reach, not further down this one"
 
 
+def test_only_the_newest_few_are_hunted_without_a_pin(sticky):
+    """A pin is what makes placing cheap - and a resume voids every pin in
+    the store at once, because a pin names the pane it was taken in and a
+    pane is what a resume replaces. So a note with no pin here is looked
+    for approximately only while it is new; the rest keep the exact scan,
+    and the moment one is found it is pinned again.
+    """
+    redrawn = list(VISIBLE)
+    redrawn[5] = "row 05 payloadx"              # the row, repainted
+    taken = note(pane="%gone")                  # a pane that is not this one
+    older = [note(id=f"o{i}", quote=f"filler {i}", rows=[f"filler {i}"],
+                  pane="%gone") for i in range(sticky.FUZZY_NOTES)]
+
+    got = sticky.resolve(redrawn, 0, len(redrawn), [taken, *older], PANE)
+    assert got[0]["row"] is None, "too far back in the store to hunt for"
+
+    got = sticky.resolve(redrawn, 0, len(redrawn), [*older, taken], PANE)
+    assert got[-1]["row"] == 5, "and found while it is one of the newest"
+
+
+def test_an_exact_match_is_found_however_old_the_note_is(sticky):
+    """The cap is on the approximate pass only. The exact scan is what
+    pins a note again after a resume, so it can never be skipped."""
+    older = [note(id=f"o{i}", quote=f"filler {i}", rows=[f"filler {i}"],
+                  pane="%gone") for i in range(sticky.FUZZY_NOTES * 2)]
+    taken = note(pane="%gone")
+    got = sticky.resolve(VISIBLE, 0, len(VISIBLE), [taken, *older], PANE)
+    assert got[0]["row"] == 5 and got[0]["match"] == "exact"
+    assert taken["pane"] == PANE, "and it is pinned here from now on"
+
+
+def test_a_note_that_shares_no_long_word_is_never_compared(sticky):
+    """The saving, rather than the answer - which is the same either way.
+
+    A note with nothing in common with what is on screen was never going to
+    match; the point is not paying difflib row by row, pass after pass, to
+    say so. That bill is what a store of a few hundred notes runs up.
+    """
+    calls = []
+    real = sticky.placement.SequenceMatcher
+
+    def counted(*args, **kw):
+        calls.append(1)
+        return real(*args, **kw)
+
+    sticky.placement.SequenceMatcher = counted
+    try:
+        elsewhere = [f"line {i:02d} something" for i in range(20)]
+        taken = note()
+        sticky.resolve(elsewhere, 0, len(elsewhere), [taken], PANE)
+        assert not calls, "nothing on screen shares a word with it"
+
+        redrawn = list(VISIBLE)
+        redrawn[5] = "row 05 payloadx"          # the row it is on, repainted
+        got = sticky.resolve(redrawn, 0, len(redrawn), [taken], PANE)
+        assert calls, "and a screen that might hold it is still compared"
+        assert got[0]["match"] == "fuzzy" and got[0]["row"] == 5
+    finally:
+        sticky.placement.SequenceMatcher = real
+
+
+def test_the_words_on_screen_are_the_long_ones(sticky):
+    """Short ones turn up everywhere and would answer yes for everything."""
+    assert sticky.screen_words(["a bc payload", "of things"]) == {"payload",
+                                                                  "things"}
+
+
 def test_placing_a_note_records_the_pane_it_was_placed_in(sticky):
     fresh = note(pane="%99", abs_line=9000)
     sticky.resolve(VISIBLE, 0, 20, [fresh], PANE)

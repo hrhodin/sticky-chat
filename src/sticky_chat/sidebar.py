@@ -16,6 +16,7 @@ from .store import agent_of, open_store, record_window, resolve_project
 from .tmux import Tmux
 from .util import (
     CLOCK_HIT,
+    log_line,
     BOLD,
     COL_COMMITTED,
     COL_FOOTER,
@@ -55,6 +56,12 @@ SIDEBAR_FROZEN_TICK = 2.0   # while you are scrolled back through the history
 
 
 SIDEBAR_SETTLE = 0.3        # one more pass after output or a scroll settles
+
+
+# The keys the sidebar answers to itself. Everything else printable belongs
+# to the agent: see `typing_through`.
+SIDEBAR_KEYS = frozenset(
+    "qrhgG?><\t\r\n xFuSst\x19\x05123456789")
 
 
 # Looking for the id an agent chose for itself: how often, and for how much
@@ -106,10 +113,10 @@ def to_log(path: str, pane: str, size: str, what: str,
     answer is always "what changed on screen", and that is not a question
     anybody can answer afterwards from a pane that has since moved on.
     """
+    if not log_line(path, f"{pane} {size} {what}"):
+        return
     try:
         with open(path, "a") as fh:
-            stamp = time.strftime("%Y-%m-%d %H:%M:%S")
-            fh.write(f"{stamp} {pane} {size} {what}\n")
             if before is None or after is None:
                 return
             shown = 0
@@ -192,6 +199,7 @@ def help_sections(agent: Agent = CLAUDE) -> list[tuple[str, list[str]]]:
             "Enter edits \u00b7 space finds it",
             "x strikes out \u00b7 esc lets go",
             "Tab or > < change tab",
+            "Any other letter types in chat",
         ]),
         ("Tabs", [
             "C-g c new: it asks which agent",
@@ -203,7 +211,7 @@ def help_sections(agent: Agent = CLAUDE) -> list[tuple[str, list[str]]]:
         ("Leaving", [
             f"C-g d detach \u2014 {agent.short} runs on",
             "C-g Q closes all",
-            "sticky-chat resume --last",
+            "sticky-chat resume brings back",
             agent.exit_hint,
         ]),
         ("Development", [
@@ -216,6 +224,23 @@ HELP_SECTIONS = help_sections()        # the default profile's, for callers
 
 
 # ------------------------------------------------------------------- help
+
+
+def typing_through(key: str) -> bool:
+    """Whether this keystroke was meant for the agent rather than for here.
+
+    The sidebar's own keys are few and the rest of the keyboard is how you
+    talk to the agent, so a letter it has no use for is not an error to
+    swallow - it is the first letter of a sentence, typed at the pane the
+    eye was on. It crosses to the chat and arrives there, which is what
+    pressing it meant. The same bargain the transcript makes when you type
+    while scrolled back, where an ordinary key leaves copy mode and lands
+    in the prompt rather than being read as a motion.
+
+    Only printable characters: the arrows, the page keys and the wheel are
+    how you move about in here, and a control code is nobody's sentence.
+    """
+    return len(key) == 1 and key.isprintable() and key not in SIDEBAR_KEYS
 
 
 def footer_text(placed: list[dict], listed: int = 0,
@@ -327,6 +352,24 @@ def build_help(width: int, height: int,
     return out + [""] * (room - len(out)) + ["", hint][:body_h - room]
 
 
+def history_order(placed: list[dict]) -> list[dict]:
+    """Every note in the order the sidebar lists them, oldest first.
+
+    By the row its text is on, which is what "oldest" means on a screen -
+    but only for the notes whose row is a row in *this* pane. `abs_line`
+    counts from the top of one pane's scrollback and says nothing about
+    another's, and a tab that has been resumed or reopened is full of notes
+    carrying numbers from panes that are gone. Those numbers are large - the
+    pane they were counted in had been running all day - so sorted in with
+    the rest they crowd out everything taken since, and the band, which
+    shows the newest end of this list, showed yesterday instead of the note
+    just taken. Unplaced elsewhere, they go above everything that is placed
+    here, in the order they were written.
+    """
+    return sorted(placed, key=lambda p: (1, p["note"].get("abs_line", 0))
+                  if p.get("here", True) else (0, 0))
+
+
 def band_window(placed: list[dict], band_h: int, scroll: int,
                 top: int = 0) -> tuple[list[dict], list[dict], int, int,
                                        list[dict]]:
@@ -351,7 +394,7 @@ def band_window(placed: list[dict], band_h: int, scroll: int,
         else:
             aligned.append(item)
 
-    history = sorted(placed, key=lambda p: p["note"].get("abs_line", 0))
+    history = history_order(placed)
     # With nothing above the view there is nothing to preview: the band only
     # earns its rows once you scroll it back through the whole history.
     anchor = len(listed) or (len(history) if scroll else 0)
@@ -435,7 +478,7 @@ def foot_lines(beneath: list[dict], width: int, foot_h: int,
     rule = "\u2500" * width
     out = [f"{DIM}{rule}{RESET}"]
     room = max(4, close_column(width) - 4)      # " - ", the text, then a gap
-    order = sorted(beneath, key=lambda p: p["note"].get("abs_line", 0))
+    order = history_order(beneath)
     # The rule always costs a row, and the "N more" line costs another when
     # there is something for it to say. Work that out before drawing rather
     # than trimming afterwards: a trim takes the count off the end, which is
@@ -776,6 +819,7 @@ def cmd_sidebar(args) -> int:
     last_mtime = -1.0
     notes: list[dict] = []
     placed: list[dict] = []
+    placed_view: tuple | None = None   # the screen those placements are of
     help_mode: bool | None = None      # None = automatic (help until first note)
     scroll = 0                         # rows back through the note history
     cursor: str | None = None          # the note the keyboard acts on
@@ -979,7 +1023,18 @@ def cmd_sidebar(args) -> int:
                     last_screen = screen
                     printed_at = now
                 if scroll == 0 or not placed:
-                    placed = resolve(visible, top_abs, pane_h, notes, pane)
+                    # Placing is what costs in here - every note matched
+                    # against every row it might sit on - and a screen that
+                    # has not moved places them exactly where it did last
+                    # time. Worth the comparison: a tab nobody is looking
+                    # at, printing nothing, was paying that bill twice a
+                    # second, and with a few hundred notes in the store the
+                    # bill is most of a second.
+                    seen_now = (screen, top_abs, pane_h)
+                    if replace or not placed or seen_now != placed_view:
+                        placed = resolve(visible, top_abs, pane_h, notes,
+                                         pane)
+                        placed_view = seen_now
                     last_placed, replace = now, False
 
             show_help = (not notes) if help_mode is None else help_mode
@@ -1011,9 +1066,7 @@ def cmd_sidebar(args) -> int:
                         if pending else None)
                 # Page the band until whatever the cursor is on is on screen:
                 # what you would act on and what you can see must not differ.
-                order = [q["id"] for q in
-                         sorted(placed,
-                                key=lambda q: q["note"].get("abs_line", 0))]
+                order = [q["id"] for q in history_order(placed)]
                 for _ in range(len(order) + 2):
                     hits.clear()
                     frame = build_frame(placed, width, height, scroll, hits,
@@ -1037,6 +1090,10 @@ def cmd_sidebar(args) -> int:
                 last_sig = signature
                 if self_pane:
                     store.save_hits(self_pane, hits)
+                if logging:
+                    to_log(logging, pane, size,
+                           f"drew ({1000 * (time.monotonic() - now):.0f}ms "
+                           f"since the pass began)")
 
             now = last_pass = time.monotonic()
 
@@ -1214,6 +1271,8 @@ def cmd_sidebar(args) -> int:
                     os.read(wake_r, 4096)
                 except BlockingIOError:
                     pass
+                if logging:
+                    to_log(logging, pane, size, "woken (signal)")
                 settle_at = time.monotonic() + SIDEBAR_SETTLE
             if sys.stdin in ready:
                 key = read_key(sys.stdin.fileno())
@@ -1348,6 +1407,14 @@ def cmd_sidebar(args) -> int:
                     # Opens a prompt and returns; what it asks for is set
                     # from in there, and the footer says so when it is.
                     run("commit", "--ask-at")
+                if typing_through(key):
+                    # Cross to the chat and let the keystroke through. The
+                    # pane is selected first so everything after it goes
+                    # there too: what this answers is somebody who started
+                    # typing a message with their eye on the notes.
+                    tm.ok("select-pane", "-t", pane)
+                    tm.ok("send-keys", "-t", pane, "-l", key)
+                    continue
                 if key.isdigit() and key != "0":
                     # The numbers on the status line are the tabs, so they
                     # are the numbers to press: 2 hands what is pending to

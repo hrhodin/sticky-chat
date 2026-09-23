@@ -327,7 +327,7 @@ back the map is frozen, so nothing moves under you.
 | `sticky-chat restore` | reopen a sidebar you closed |
 | `sticky-chat reload` | rewrite the config and restart every sidebar |
 | `sticky-chat quit` | close every window and stop the agents in them |
-| `sticky-chat resume [--last]` | reopen your tabs; `--last` is the set you quit with |
+| `sticky-chat resume [--all] [--yes]` | reopen the tabs that were open last time; `--all` goes further back |
 | `sticky-chat add --note "…"` | make a note from text on stdin |
 | `sticky-chat rm <id>` | delete one note |
 | `sticky-chat clear [--committed]` | delete every note, or only the sent ones |
@@ -402,13 +402,12 @@ It names the projects it is about to close and waits for a yes. Nothing is
 lost: your notes are files, and every tab is recorded, so
 
 ```sh
-sticky-chat resume --last
+sticky-chat resume
 ```
 
-brings back exactly the set that was open when you quit. `resume` on its
-own offers every tab you have ever had, one at a time. A reboot amounts to
-the same thing as quitting, except that nothing gets marked, so use plain
-`resume` after one.
+brings back exactly the set that was open when you quit — and a reboot, a
+crash or a lid closed on a Friday comes back the same way, because none of
+this depends on having quit properly.
 
 ## Coming back after a restart
 
@@ -419,23 +418,40 @@ the command line, the note store, the sidebar width. Afterwards:
 sticky-chat resume
 ```
 
-Each tab is offered in turn, with the date you last had it open. Answer `y`
-to reopen it, `n` to skip, `a` to take the rest without asking, `q` to stop.
-`--all` skips the questions entirely, which is what a login item would use.
-Running `sticky-chat` with nothing running and tabs remembered offers the
-same thing.
+What comes back is the last set that was open, not every tab you have ever
+had. Nobody records the moment a machine reboots, so it is worked out from
+what is already written down: a sidebar stamps its record every minute
+while it runs, so the tabs that stopped together are the ones stamped
+within a heartbeat of each other, and one you closed at lunchtime is hours
+behind them. A clean `sticky-chat quit` is the same question with the same
+answer.
+
+The set is named and taken as a set, the way it went away:
+
+```
+sticky: 3 tabs were open 7h ago: sticky-chat, notes-api and 1 more. Reopen
+them, or p to go through them? [y/n/p]
+```
+
+`p` asks about each one in turn — `y`, `n`, `a` for the rest, `q` to stop.
+`--yes` asks nothing, which is what a login item would use. Running
+`sticky-chat` with nothing running offers the same set in one line.
+
+To reach further back there is `--all`, which goes through every tab ever
+opened, one at a time, and `C-g o` (`sticky-chat reopen`), which lists them
+newest first and puts one back.
 
 A tab is remembered until you say otherwise. If some have gone untouched
-for a year, resume offers once to forget them. Should a conversation itself
-be gone, the tab still opens on the same project with a fresh one, and says
-so.
+for a year, `resume --all` offers once to forget them. Should a
+conversation itself be gone, the tab still opens on the same project with a
+fresh one, and says so.
 
 ## What survives what
 
 | event | tmux session | the agent's conversation | your notes |
 |---|---|---|---|
 | closing the terminal window | survives — the tmux server is a daemon, so `sticky-chat` re-attaches | keeps running, mid-task included | kept |
-| logging out or rebooting | gone; the server dies with the machine | reopen it with `sticky-chat resume` | kept |
+| logging out or rebooting | gone; the server dies with the machine | `sticky-chat resume` brings back the set that was up | kept |
 | `q` in the sidebar | window stays, `C-g r` reopens the pane | untouched | kept |
 
 Notes are files, so they are the one thing that always survives.

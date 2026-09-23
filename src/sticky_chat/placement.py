@@ -29,6 +29,9 @@ PROMPT_BOX_ROWS = CLAUDE.prompt_box_rows
 PASTE_PLACEHOLDER = CLAUDE.paste_placeholder
 
 
+FUZZY_NOTES = 10            # notes with no pin here that may still be hunted
+
+
 FUZZY_DRIFT = 6             # rows a note may move before an approximate match
 
 
@@ -92,8 +95,21 @@ def context_score(visible: list[str], row: int, note: dict) -> tuple[int, int]:
     return matched, comparable
 
 
+LONG_WORD = re.compile(r"\S{6,}")
+
+
+def screen_words(visible: list[str]) -> set[str]:
+    """Every long word on screen, for the approximate pass to ask about.
+
+    Built once a pass and asked once a note, which is the cheapest question
+    there is next to the comparison it stands in for.
+    """
+    return {word for row in visible for word in LONG_WORD.findall(row)}
+
+
 def note_candidates(visible: list[str], note: dict, hint: int,
-                    fuzzy: bool = True) -> list[dict]:
+                    fuzzy: bool = True,
+                    words: set[str] | None = None) -> list[dict]:
     """Every plausible row for one note, best first.
 
     Exact matches beat fuzzy ones, fuzzy beats the landmark fallback, and
@@ -126,21 +142,39 @@ def note_candidates(visible: list[str], note: dict, hint: int,
         return []
 
     joined = "\n".join(rows)
-    if len(re.sub(r"\s", "", joined)) >= MIN_FUZZY_CHARS:
+    # What the approximate pass is for is text that was redrawn: re-wrapped
+    # by a narrower pane, or a line an agent repaints with a new number in
+    # it. Redrawing moves words about and changes a few; it does not
+    # replace every one of them, and nothing can be four-fifths of this
+    # quote without sharing a long word with it. So a note that shares none
+    # with anything on screen is not on this screen, and asking difflib
+    # about it - row by row, pass after pass - is the bill that a store of
+    # a few hundred notes runs up. Short words are not asked about: they
+    # turn up everywhere and would answer yes for everything.
+    mine = LONG_WORD.findall(joined) if words is not None else []
+    if words is not None and mine and not any(w in words for w in mine):
+        fuzzy = False
+    if fuzzy and len(re.sub(r"\s", "", joined)) >= MIN_FUZZY_CHARS:
         fuzzy = []
         # Every row on screen is compared against every note on every pass,
         # and the real comparison is the expensive part of drawing at all.
         # difflib's two cheap ratios are upper bounds on the real one, so a
         # row they put below the threshold cannot reach it: rejecting on them
         # skips work without changing which rows come back, and that filter
-        # is where all of the saving is. The matcher is reused only to keep
-        # the quote as the first sequence - difflib caches the *second* one,
-        # so nothing is saved by holding on to it - because which side is
-        # which is not something difflib promises to be symmetric about.
+        # is where most of the saving is.
+        #
+        # The rest of it is which side goes where. difflib indexes the
+        # sequence it is given *second* - where each character sits, and how
+        # many of each there are, which is the whole of `quick_ratio` - and
+        # throws that index away the moment it is handed another one. So the
+        # quote goes second and is indexed once, and the rows on screen go
+        # first, where a new one costs nothing to set. The other way round,
+        # which this was, rebuilt the index for every row of every note on
+        # every pass.
         matcher = SequenceMatcher(None)
-        matcher.set_seq1(joined)
+        matcher.set_seq2(joined)
         for i in range(len(visible) - span + 1):
-            matcher.set_seq2("\n".join(visible[i:i + span]))
+            matcher.set_seq1("\n".join(visible[i:i + span]))
             if matcher.real_quick_ratio() < FUZZY_THRESHOLD:
                 continue
             if matcher.quick_ratio() < FUZZY_THRESHOLD:
@@ -240,6 +274,18 @@ def resolve(visible: list[str], top_abs: int, height: int,
     """
     cands = {}
     bottom_abs = top_abs + len(visible)
+    words = screen_words(visible)
+    # A note placed exactly is pinned to that row, and a pin makes the
+    # approximate pass nearly free: a note pinned far from the window is not
+    # looked for at all. But a pin names the pane it was taken in, and a
+    # pane is what resuming a tab replaces - so a resume voids every pin in
+    # the store at once, and a store of a few hundred notes then hunts for
+    # every one of them, on every pass, for the rest of the session.
+    #
+    # So what has no pin here is hunted only while it is new. The rest keep
+    # the exact scan, which is cheap and never stops running: the moment
+    # one of them is found, it is pinned again and back to being free.
+    hunted = {id(note) for note in notes[-FUZZY_NOTES:]}
 
     def positioned(note: dict) -> bool:
         """Whether this note's remembered row means anything here.
@@ -264,9 +310,11 @@ def resolve(visible: list[str], top_abs: int, height: int,
         # This is not a shortcut with a cost: the exact scan still runs, and
         # an exact match is still taken wherever on screen it turns up.
         anchor = note.get("anchor_abs") if here else None
-        near = anchor is None or (anchor + FUZZY_DRIFT >= top_abs
-                                  and anchor - FUZZY_DRIFT <= bottom_abs)
-        cands[id(note)] = note_candidates(visible, note, hint, fuzzy=near)
+        near = (id(note) in hunted if anchor is None
+                else (anchor + FUZZY_DRIFT >= top_abs
+                      and anchor - FUZZY_DRIFT <= bottom_abs))
+        cands[id(note)] = note_candidates(visible, note, hint, fuzzy=near,
+                                          words=words)
 
     owned: dict[int, int] = {}          # screen row -> id() of the owning note
     chosen: dict[int, dict] = {}
@@ -312,7 +360,13 @@ def resolve(visible: list[str], top_abs: int, height: int,
                 note["pane"] = pane
             if cand["match"] == "exact":
                 note["anchor_abs"] = note["abs_line"]
-        out.append({**result, "id": note["id"], "note": note})
+        # Whether this note's `abs_line` is a position in *this* pane, now
+        # that a placed one has just been restamped with one. What reads it
+        # is the sidebar's history order: a number counted from the top of
+        # another pane's scrollback sorts against these as if it were one
+        # of them, and the panes that came before were longer.
+        out.append({**result, "id": note["id"], "note": note,
+                    "here": positioned(note)})
     return out
 
 

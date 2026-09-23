@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -31,6 +32,8 @@ from .config import (
     install_hooks,
     pin_clients,
     prime_rows,
+    room_for_new_windows,
+    use_client_size,
     virtual_window,
     write_config,
 )
@@ -47,6 +50,7 @@ from .store import (
     agent_of,
     claude_pane,
     known_windows,
+    last_run,
     launched_as,
     names_a_session,
     open_store,
@@ -63,6 +67,7 @@ from .store import (
 )
 from .tmux import SESSION_NAME, Tmux
 from .util import (
+    log_line,
     CLOCK_HIT,
     BOLD,
     COL_COMMITTED,
@@ -1174,11 +1179,17 @@ def open_tab(tm: Tmux, record: dict, command: str, client: str | None) -> str:
     launched = time.time()
     config = write_config(self_path())
     name = record.get("name") or os.path.basename(project.rstrip("/"))
+    # The room the agent will draw its replay into. A tab is opened
+    # detached and draws before anybody looks at it, and what it draws at 80
+    # columns stays wrapped at 80 for good - see `room_for_new_windows`.
+    cols, rows = room_for_new_windows(tm)
     if not tm.server_running():
         left = tm.run("-f", config, "new-session", "-d", "-s", SESSION_NAME,
+                      "-x", str(cols), "-y", str(rows),
                       "-n", name, "-c", project, *env,
                       "-P", "-F", "#{pane_id}", launch).strip()
     else:
+        use_client_size(tm)
         left = tm.run("new-window", "-d", "-t", f"{SESSION_NAME}:", "-n", name,
                       "-c", project, *env, "-P", "-F", "#{pane_id}",
                       launch).strip()
@@ -1288,60 +1299,128 @@ def cmd_quit(args) -> int:
             return 0
 
     # Remember the shape of this moment, so resume can offer it back whole.
+    # Only the tabs that were up are stamped, and they are stamped as of
+    # now, which is when they went. A record merely carrying an older
+    # quit's mark has it cleared without being touched: moving its
+    # `last_seen` would file a tab closed weeks ago under tonight's run,
+    # which is the one thing `last_run` reads.
     for record in known_windows():
         session = record.get("session", "")
         if not session:
             continue
-        record_window(session, open_at_quit=session in open_now)
+        was_open = session in open_now
+        if was_open or record.get("open_at_quit"):
+            record_window(session, touch=was_open, open_at_quit=was_open)
 
     tm.ok("kill-server")
     if not args.quiet:
         print(f"sticky: closed {len(open_now)} tab(s). "
-              f"Bring them back with: sticky-chat resume --last")
+              f"Bring them back with: sticky-chat resume")
     return 0
 
 
-def cmd_resume(args) -> int:
-    """Reopen the tabs that were open before, each on its own conversation.
+def run_summary(records: list[dict]) -> str:
+    """The last run in one phrase: how many tabs, when, and which.
 
-    Every tab is offered in turn, because after a restart you rarely want all
-    of them back; answering `a` takes the rest without asking again.
+    Named rather than counted, because "9 tabs" is not something anybody
+    can say yes to. Three names is what leaves room for the question on the
+    same line; the rest are counted, and the picker lists them properly.
+    """
+    names = [tab_name(r) for r in records]
+    shown = ", ".join(names[:3])
+    if len(names) > 3:
+        shown += f" and {len(names) - 3} more"
+    when = ago(max(r.get("last_seen", 0) for r in records))
+    was = "1 tab was" if len(names) == 1 else f"{len(names)} tabs were"
+    return f"{was} open {when}: {shown}"
+
+
+def not_showing(records: list[dict], tm: Tmux) -> list[dict]:
+    """The remembered tabs that are not already on screen.
+
+    Reopening a tab that is still running is a second tab on a live
+    conversation, which the agent either refuses or - worse - takes. The
+    panes are asked rather than the records, because a record's `last_seen`
+    is kept warm by the very sidebar that would make it look closed.
+    """
+    here = tabs_showing(tm)
+    return [r for r in records if r.get("session") not in here
+            and r.get("store") not in here]
+
+
+def forget_window(session: str) -> None:
+    try:
+        os.unlink(os.path.join(windows_dir(), f"{session}.json"))
+    except OSError:
+        pass
+
+
+def cmd_resume(args) -> int:
+    """Reopen the tabs that were open when sticky last stopped.
+
+    The last run, not the whole history. What you want back after a reboot
+    is the desk you left, and every tab you have ever opened offered one at
+    a time is a list you answer `q` to. The set goes back as a set, because
+    that is how it went away - one question for all of it, `p` to go
+    through it tab by tab instead.
+
+    `--all` is the whole history, one at a time, for finding something
+    older; `--yes` asks nothing, which is what a login item wants.
     """
     records = known_windows()
-    if getattr(args, "last", False):
-        records = [r for r in records if r.get("open_at_quit")]
-        if not records:
-            print("sticky: no tabs were open at the last quit")
-            return 0
     if not records:
         print("sticky: no tabs remembered yet")
         return 0
+    yes = bool(getattr(args, "yes", False))
 
-    stale = [r for r in records if time.time() - r.get("last_seen", 0) > YEAR]
-    if stale and not args.all:
-        answer = ask(f"sticky: {len(stale)} tab(s) untouched for a year. "
-                     f"Forget them?", "n/y")
-        if answer == "y":
-            for record in stale:
-                path = os.path.join(windows_dir(),
-                                    f"{record.get('session')}.json")
-                try:
-                    os.unlink(path)
-                except OSError:
-                    pass
-            records = [r for r in records if r not in stale]
+    if args.all:
+        stale = [r for r in records
+                 if time.time() - r.get("last_seen", 0) > YEAR]
+        if stale and not yes:
+            answer = ask(f"sticky: {len(stale)} tab(s) untouched for a year. "
+                         f"Forget them?", "n/y")
+            if answer == "y":
+                for record in stale:
+                    forget_window(record.get("session", ""))
+                records = [r for r in records if r not in stale]
+        take_all = yes
+    else:
+        records = last_run(records)
+        take_all = True                 # asked for as a set, just below
 
     tm = Tmux(args.socket)
-    # Asking for the set you just closed is answer enough; --all means the
-    # same for everything remembered.
-    take_all = args.all or getattr(args, "last", False)
+    wanted = not_showing(records, tm)
+    if not wanted:
+        print("sticky: those tabs are open already" if records
+              else "sticky: nothing left to reopen")
+        return 0
+
+    if not args.all and not yes:
+        answer = ask(f"sticky: {run_summary(wanted)}. Reopen them, "
+                     f"or p to go through them one at a time?", "y/n/p")
+        if answer == "p":
+            take_all = False
+        elif answer != "y":
+            print("sticky: left closed")
+            return 0
+
+    if not take_all:
+        # Said once, above the walk, rather than four letters at the end of
+        # every row that you are left to guess at. `n` is the one that
+        # skips; `q` stops the asking, and opens nothing more.
+        print("sticky: y reopens it \u00b7 n skips it \u00b7 "
+              "a reopens all the rest \u00b7 q stops here")
+
     opened = 0
-    for record in records:
+    for record in wanted:
         project = record.get("project", "?")
         if not take_all:
             seen = time.strftime("%d %b", time.localtime(
                 record.get("last_seen", 0)))
-            answer = ask(f"  {project}  (last open {seen})", "y/n/a/q")
+            # Named as the summary above named it, not by its path: the
+            # question is which of those tabs this is.
+            answer = ask(f"  {tab_name(record)}  (last open {seen})",
+                         "y/n/a/q")
             if answer == "q":
                 break
             if answer == "a":
@@ -1492,7 +1571,7 @@ def pick_tab(records: list[dict]) -> dict | None:
         print(truncate(tab_row(number, record), width))
     if len(shown) < len(records):
         print(f"{DIM}  \u2026 and {len(records) - len(shown)} older; "
-              f"sticky-chat resume offers them all{RESET}")
+              f"sticky-chat resume --all offers them all{RESET}")
     print()
     typed = ""
     while True:
@@ -1565,6 +1644,91 @@ def cmd_reopen(args) -> int:
         return 0
     return attach(tm, tm.fmt(left, "#{session_name}:#{window_index}"),
                   args.client)
+
+
+# What a quote can be before it is not worth searching for, and how many
+# of them one search will carry. A regular expression the width of a
+# hundred notes is one tmux has to run against every row it draws.
+MARK_QUOTES = 40
+
+
+def mark_pattern(notes: list[dict]) -> str:
+    """One regular expression matching every line that has a note on it.
+
+    tmux's copy-mode search takes an extended regular expression and paints
+    every match with `copy-mode-match-style`, so the whole set goes in as
+    one alternation. What is matched is the row as it was captured rather
+    than the quote as it was stored: the quote is what you selected, which
+    may be half a line, and a half-line highlight reads as a mistake.
+    """
+    seen, out = set(), []
+    for note in notes:
+        if note.get("deleted"):
+            continue
+        rows = note.get("rows") or [note.get("quote", "")]
+        line = (rows[0] or "").strip()
+        if len(line) < 3 or line in seen:
+            # Two words are matched all over a pane and light up rows that
+            # nobody annotated, which is worse than lighting up none.
+            continue
+        seen.add(line)
+        out.append(re.sub(r"([.\[\]()*+?{}|^$\\])", r"\\\1", line))
+        if len(out) >= MARK_QUOTES:
+            break
+    return "|".join(out)
+
+
+def cmd_marks(args) -> int:
+    """Light up the lines that have notes, in the pane you scrolled back in.
+
+    tmux will not restyle a pane that is being written to, but a pane you
+    have scrolled back in is in copy mode, and copy mode paints its search
+    matches. So the search is set for you on the way in: reading back is
+    exactly when knowing which lines you have already marked is worth
+    something, and it costs a keystroke you were pressing anyway.
+    """
+    tm = Tmux(args.socket)
+    pane = args.pane
+    if not pane or tm.fmt(pane, "#{pane_in_mode}") != "1":
+        return 0                        # not reading back: nothing to paint
+    project = resolve_project(tm, pane, args.project)
+    store = open_store(tm, pane, project, getattr(args, "store", None))
+    pattern = mark_pattern(store.load())
+    if not pattern:
+        return 0
+    # A search jumps to a match, and being yanked somewhere else is not
+    # what scrolling back means. Where you were reading is put back
+    # afterwards; the highlighting is what was wanted and it stays.
+    try:
+        was = int(tm.fmt(pane, "#{scroll_position}") or 0)
+    except ValueError:
+        was = 0
+    tm.ok("send-keys", "-t", pane, "-X", "search-backward", pattern)
+    try:
+        now = int(tm.fmt(pane, "#{scroll_position}") or 0)
+    except ValueError:
+        now = was
+    if now != was:
+        tm.ok("send-keys", "-t", pane, "-X", "-N", str(abs(was - now)),
+              "scroll-up" if was > now else "scroll-down")
+    if not getattr(args, "quiet", False):
+        print("sticky: the annotated lines are lit while you read back")
+    return 0
+
+
+def cmd_trace(args) -> int:
+    """Put one line in the sidebar log, from a key binding or a hook.
+
+    A timeline is only worth anything if everything that happened is on the
+    same one: the click, the hooks it set off, what `fit` did, and every
+    sidebar that woke up because of it. The bindings that call this are
+    guarded on the log being on, so nothing is started while it is off.
+    """
+    tm = Tmux(args.socket)
+    path = tm.run("show-options", "-gqv", "@sticky_log").strip()
+    if path:
+        log_line(path, f"-- {args.label}")
+    return 0
 
 
 def cmd_log(args) -> int:
@@ -1914,11 +2078,14 @@ def cmd_start(args) -> int:
     launch = (prime_rows(command, args.virtual_rows)
               if args.virtual_rows else command)
     launched = time.time()              # before the pane, as in `open_tab`
+    cols, rows = room_for_new_windows(tm)     # as in `open_tab`
     if not tm.server_running():
         left = tm.run("-f", config, "new-session", "-d", "-s", SESSION_NAME,
+                      "-x", str(cols), "-y", str(rows),
                       "-n", name, "-c", project, *env,
                       "-P", "-F", "#{pane_id}", launch).strip()
     else:
+        use_client_size(tm)
         left = tm.run("new-window", "-d", "-t", f"{SESSION_NAME}:", "-n", name,
                       "-c", project, *env,
                       "-P", "-F", "#{pane_id}", launch).strip()
@@ -1984,12 +2151,19 @@ def cmd_fit(args) -> int:
     try:
         listing = tm.run("list-panes", "-a", "-F",
                          "#{pane_id}\t#{@sticky_role}\t#{@sticky_width}\t"
-                         "#{window_zoomed_flag}\t#{pane_pid}")
+                         "#{window_zoomed_flag}\t#{pane_pid}\t#{pane_width}\t"
+                         "#{@sticky_log}")
     except RuntimeError:
         return 0
+    started = time.monotonic()
+    # Read out of the listing that was being taken anyway, so a log nobody
+    # turned on costs nothing. `fit` is what a tab switch reaches first, so
+    # it is where the timeline of one begins.
+    logging = ""
     woken = []
     for line in listing.splitlines():
-        parts = [*line.split("\t"), "", "", "", "", ""][:5]
+        parts = [*line.split("\t"), "", "", "", "", "", "", ""][:7]
+        logging = logging or parts[6].strip()
         if parts[1] != "sidebar":
             continue
         woken.append(parts[4])
@@ -1999,8 +2173,13 @@ def cmd_fit(args) -> int:
             width = int(parts[2])
         except ValueError:
             continue
+        if parts[5] == str(width):
+            continue          # already that wide: this runs on every switch
         tm.ok("resize-pane", "-t", parts[0], "-x", str(width))
+    if logging:
+        log_line(logging, f"fit: began, {len(woken)} sidebars to wake")
     fit_windows(tm)
+    use_client_size(tm)     # a tab opened later is opened at this size
     pin_clients(tm)
     # The hooks that call this are the ones that change how much room the
     # sidebar has. Nothing else would tell it, and it no longer looks.
@@ -2010,6 +2189,9 @@ def cmd_fit(args) -> int:
                 os.kill(int(pid), signal.SIGUSR1)
             except OSError:
                 pass
+    if logging:
+        log_line(logging,
+                 f"fit: done in {1000 * (time.monotonic() - started):.0f}ms")
     return 0
 
 

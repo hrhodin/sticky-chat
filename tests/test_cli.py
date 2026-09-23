@@ -1493,6 +1493,295 @@ class TestQuitting:
         assert upper and "--send" in upper[0]
 
 
+class TestTheSizeATabIsOpenedAt:
+    """A tab is opened detached and draws before anybody looks at it.
+
+    tmux sizes a window nobody has seen by `default-size`, which is 80x24,
+    and an agent draws its replay into whatever it is given. Since tmux
+    never reflows history, 80 columns is what those lines stay wrapped at
+    however wide the window becomes later - so a note quoting a full-width
+    line has nothing left to match.
+    """
+
+    class FakeTmux:
+        def __init__(self, clients=""):
+            self.socket, self.clients, self.set = "test", clients, []
+
+        def run(self, *args):
+            return self.clients if args[0] == "list-clients" else ""
+
+        def ok(self, *args):
+            self.set.append(args)
+            return True
+
+    def test_it_takes_the_room_a_client_really_has(self, sticky):
+        tm = self.FakeTmux("@1\t56\t213\t2\n")
+        assert sticky.room_for_new_windows(tm) == (213, 54), "less the status"
+
+    def test_the_largest_client_wins(self, sticky):
+        tm = self.FakeTmux("@1\t56\t213\ton\n@2\t30\t100\ton\n")
+        assert sticky.room_for_new_windows(tm) == (213, 55)
+
+    def test_with_nobody_attached_it_asks_the_terminal(self, sticky,
+                                                       monkeypatch):
+        """`resume` typed in a shell starts the server itself: there is no
+        client yet, and the terminal it was typed in is the only thing that
+        knows how much room there is."""
+        monkeypatch.setattr(sticky.config, "terminal_size", lambda: (120, 40))
+        assert sticky.room_for_new_windows(self.FakeTmux()) == (120, 40)
+
+    def test_the_option_is_held_at_that(self, sticky):
+        tm = self.FakeTmux("@1\t56\t213\t2\n")
+        assert sticky.use_client_size(tm) == ("213", "54")
+        assert ("set-option", "-g", "default-size", "213x54") in tm.set
+
+
+class TestTheHooksAreHungOnce:
+    """The row-count hook is appended, because two of the hooks it goes on
+    carry one of their own - and appending is what has to be done at most
+    once. It runs every time a tab opens, so a blind append leaves a copy
+    per tab: eleven tabs in, opening the twelfth walked every window eleven
+    times over to answer a question with one answer.
+    """
+
+    class FakeTmux:
+        """A server that remembers what its hooks were set to."""
+
+        def __init__(self, hooks=None):
+            self.socket = "test"
+            self.hooks = dict(hooks or {})
+            self.sent = []
+
+        def run(self, *args):
+            if args[0] == "show-options":
+                name = args[-1]
+                if name not in self.hooks:
+                    raise RuntimeError(f"no such option: {name}")
+                return "\n".join(f"{name}[{n}] {line}" for n, line
+                                  in enumerate(self.hooks[name]))
+            return ""
+
+        def ok(self, *args):
+            self.sent.append(args)
+            if args[0] == "set-hook":
+                flags, when = args[1], args[2]
+                if "u" in flags:
+                    self.hooks.pop(when, None)
+                elif "a" in flags:
+                    self.hooks.setdefault(when, []).append(args[3])
+                else:
+                    self.hooks[when] = [args[3]]
+            return True
+
+        def fmt(self, target, template):
+            return ""
+
+    ROWS = ("after-new-window", "window-unlinked", "window-linked",
+            "client-attached", "session-window-changed")
+
+    def mine(self, sticky, tm, when):
+        return [line for line in tm.hooks.get(when, [])
+                if sticky.HAS_OTHERS in line]
+
+    def test_arriving_at_a_tab_is_heard_however_you_got_there(self, sticky):
+        """`after-select-window` misses the mouse: tmux's own binding for
+        clicking a tab is `switch-client`, which changes the window without
+        selecting one. The tab then came up with the sidebar of the tab you
+        left, until that agent next printed."""
+        tm = self.FakeTmux()
+        sticky.install_hooks(tm)
+        arrive = tm.hooks["session-window-changed"]
+        assert any("fit" in line for line in arrive), arrive
+        assert any(sticky.HAS_OTHERS in line for line in arrive), arrive
+
+    def test_the_hook_it_used_to_be_on_is_given_back(self, sticky):
+        """Left there it would do the arrival twice for every keystroke."""
+        tm = self.FakeTmux({"after-select-window": [
+            sticky.ARRIVE_HOOK.format(binary=sticky.self_path())]})
+        sticky.install_hooks(tm)
+        assert not tm.hooks.get("after-select-window")
+
+    def test_but_not_a_hook_of_your_own(self, sticky):
+        yours = "run-shell -b 'my-own-thing'"
+        tm = self.FakeTmux({"after-select-window": [
+            sticky.ARRIVE_HOOK.format(binary=sticky.self_path()), yours]})
+        sticky.install_hooks(tm)
+        assert tm.hooks["after-select-window"] == [
+            sticky.ARRIVE_HOOK.format(binary=sticky.self_path()), yours]
+
+    def test_opening_tab_after_tab_leaves_one_copy(self, sticky):
+        tm = self.FakeTmux()
+        for _ in range(5):                   # five tabs, five installs
+            sticky.install_hooks(tm)
+        for when in self.ROWS:
+            assert len(self.mine(sticky, tm, when)) == 1, when
+
+    def test_copies_from_before_are_collapsed(self, sticky):
+        """Self-healing, so the machine does not have to be restarted to
+        be rid of them."""
+        tm = self.FakeTmux({"window-linked": [sticky.ROWS_HOOK] * 11})
+        sticky.install_hooks(tm)
+        assert tm.hooks["window-linked"] == [sticky.ROWS_HOOK]
+
+    def test_an_override_of_your_own_is_not_collapsed(self, sticky):
+        """The hook is shared, and yours is not ours to throw away: it is
+        left alone, copies and all."""
+        yours = "run-shell -b 'my-own-thing'"
+        tm = self.FakeTmux({"window-linked": [sticky.ROWS_HOOK, yours]})
+        sticky.install_hooks(tm)
+        assert yours in tm.hooks["window-linked"]
+        assert len(self.mine(sticky, tm, "window-linked")) == 1
+
+
+class TestTheLastRunOfTabs:
+    """Which tabs went away together, read off the stamps their sidebars
+    left behind.
+
+    Nothing is written on the way out - that is the point. A reboot, a
+    crash or a lid closed on a Friday gives no warning, and those are
+    exactly the exits you want your tabs back from. What they do leave is a
+    row of `last_seen` stamps that stop within a heartbeat of each other,
+    which is what a run is.
+    """
+
+    class FakeTmux:
+        """A server that answers list-panes and remembers being killed."""
+
+        def __init__(self, panes=""):
+            self.socket, self.panes, self.killed = "test", panes, False
+
+        def server_running(self):
+            return True
+
+        def run(self, *args):
+            return self.panes if args[0] == "list-panes" else ""
+
+        def ok(self, *args):
+            self.killed = self.killed or args[0] == "kill-server"
+            return True
+
+        def fmt(self, target, template):
+            return ""
+
+    def remember(self, sticky, home, monkeypatch, *ages):
+        """One record per age, in seconds before now. Newest first."""
+        monkeypatch.setattr(sticky.store, "STATE_HOME", str(home))
+        now = time.time()
+        for number, age in enumerate(ages):
+            sticky.record_window(
+                f"tab-{number}", touch=False, project=str(home),
+                name=f"tab-{number}", agent="claude",
+                command=f"claude --session-id tab-{number}",
+                last_seen=now - age)
+        return [f"tab-{number}" for number in range(len(ages))]
+
+    def test_the_tabs_that_stopped_together_are_the_run(
+            self, sticky, tmp_path, monkeypatch):
+        """A sidebar stamps its record once a minute, so tabs that were up
+        at the same moment are a heartbeat or two apart - and the one you
+        closed at lunchtime is hours behind them."""
+        self.remember(sticky, tmp_path, monkeypatch, 0, 45, 70, 7 * 3600)
+        assert [r["name"] for r in sticky.last_run()] == [
+            "tab-0", "tab-1", "tab-2"]
+
+    def test_a_single_tab_is_a_run_of_its_own(
+            self, sticky, tmp_path, monkeypatch):
+        self.remember(sticky, tmp_path, monkeypatch, 3 * 86400)
+        assert [r["name"] for r in sticky.last_run()] == ["tab-0"]
+
+    def test_quitting_does_not_restamp_the_tabs_it_did_not_close(
+            self, sticky, tmp_path, monkeypatch):
+        """The stamps are the only evidence of which tabs were up. A quit
+        that wrote this moment onto every record ever made would file a tab
+        closed in August under tonight's run - which is how resume came to
+        offer a year of them at once."""
+        self.remember(sticky, tmp_path, monkeypatch, 0, 40 * 86400)
+        was = {r["session"]: r["last_seen"] for r in sticky.known_windows()}
+        tm = self.FakeTmux(f"claude\ttab-0\t{tmp_path}\tclaude\n")
+        monkeypatch.setattr(sticky.commands, "Tmux", lambda socket: tm)
+        assert sticky.cmd_quit(argparse.Namespace(
+            socket=None, yes=True, quiet=True)) == 0
+        assert tm.killed
+        now = {r["session"]: r for r in sticky.known_windows()}
+        assert now["tab-1"]["last_seen"] == was["tab-1"], "left where it was"
+        assert now["tab-0"]["last_seen"] > was["tab-0"], "it went just now"
+        assert now["tab-0"]["open_at_quit"] is True
+        assert [r["session"] for r in sticky.last_run()] == ["tab-0"]
+
+    def resume(self, sticky, monkeypatch, tm, answer, **flags):
+        """Run `resume`; returns what was asked, and what was opened."""
+        asked, opened = [], []
+
+        def ask(question, choices):
+            asked.append(question)
+            return answer
+
+        monkeypatch.setattr(sticky.commands, "ask", ask)
+        monkeypatch.setattr(sticky.commands, "open_tab",
+                            lambda tm, record, command, client:
+                            opened.append(record["name"]) or "%9")
+        monkeypatch.setattr(sticky.commands, "Tmux", lambda socket: tm)
+        args = argparse.Namespace(socket=None, client=None, detach=True,
+                                  **{"all": False, "last": False,
+                                     "yes": False, **flags})
+        assert sticky.cmd_resume(args) == 0
+        return asked, opened
+
+    def test_resume_offers_the_last_run_rather_than_everything(
+            self, sticky, tmp_path, monkeypatch):
+        """One question about the set, because the set is how it went away
+        - not one question per tab about every tab there has ever been."""
+        self.remember(sticky, tmp_path, monkeypatch, 0, 30, 6 * 3600, 86400)
+        asked, opened = self.resume(
+            sticky, monkeypatch, self.FakeTmux(), "y")
+        assert len(asked) == 1, asked
+        assert "2 tabs were open" in asked[0] and "tab-0, tab-1" in asked[0]
+        assert opened == ["tab-0", "tab-1"]
+
+    def test_saying_no_opens_nothing(
+            self, sticky, tmp_path, monkeypatch):
+        self.remember(sticky, tmp_path, monkeypatch, 0, 30)
+        assert self.resume(sticky, monkeypatch, self.FakeTmux(), "n")[1] == []
+
+    def test_a_tab_already_on_screen_is_not_offered_again(
+            self, sticky, tmp_path, monkeypatch):
+        """Reopening it would be a second tab on a live conversation. The
+        panes say so, because a record's stamp is kept warm by the very
+        sidebar that would make it look closed."""
+        self.remember(sticky, tmp_path, monkeypatch, 0, 30)
+        asked, opened = self.resume(
+            sticky, monkeypatch, self.FakeTmux("tab-0\t\n"), "y")
+        assert opened == ["tab-1"]
+        assert "1 tab was open" in asked[0]
+
+    def test_the_walk_says_what_its_letters_do(
+            self, sticky, tmp_path, monkeypatch, capsys):
+        """Four letters at the end of a row are four letters to guess at."""
+        self.remember(sticky, tmp_path, monkeypatch, 0, 30)
+        self.resume(sticky, monkeypatch, self.FakeTmux(), "p")
+        said = capsys.readouterr().out
+        for letter, means in (("y", "reopens"), ("n", "skips"),
+                              ("a", "all the rest"), ("q", "stops")):
+            assert f"{letter} {means}" in said or means in said, said
+
+    def test_all_reaches_back_past_the_last_run(
+            self, sticky, tmp_path, monkeypatch):
+        """The rarer job: finding one tab from last week. Still asked about
+        one at a time, and `a` takes the rest."""
+        self.remember(sticky, tmp_path, monkeypatch, 0, 6 * 3600, 86400)
+        asked, opened = self.resume(
+            sticky, monkeypatch, self.FakeTmux(), "a", all=True)
+        assert opened == ["tab-0", "tab-1", "tab-2"]
+        assert len(asked) == 1, "`a` means stop asking"
+
+    def test_yes_asks_nothing_at_all(self, sticky, tmp_path, monkeypatch):
+        """What a login item runs."""
+        self.remember(sticky, tmp_path, monkeypatch, 0, 30, 86400)
+        asked, opened = self.resume(
+            sticky, monkeypatch, self.FakeTmux(), "n", yes=True)
+        assert asked == [] and opened == ["tab-0", "tab-1"]
+
+
 class TestTheDismissingClick:
     """Clicking away from a prompt finishes the note, and nothing else.
 

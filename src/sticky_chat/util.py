@@ -185,6 +185,23 @@ def terminal_width(default: int = 80) -> int:
         return default
 
 
+def log_line(path: str, text: str) -> bool:
+    """One timestamped line in the sidebar log. False if it could not be.
+
+    Milliseconds, because what the log is for is the order things happened
+    in and the gaps between them - and the gaps worth chasing are shorter
+    than a second.
+    """
+    try:
+        with open(path, "a") as fh:
+            now = time.time()
+            stamp = time.strftime("%H:%M:%S", time.localtime(now))
+            fh.write(f"{stamp}.{int(now % 1 * 1000):03d} {text}\n")
+        return True
+    except OSError:
+        return False                    # a log nobody can write is not a fault
+
+
 def terminal_size(default=(80, 24)) -> tuple[int, int]:
     try:
         size = os.get_terminal_size(sys.stdout.fileno())

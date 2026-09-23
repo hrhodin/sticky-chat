@@ -33,11 +33,17 @@ def windows_dir() -> str:
     return os.path.join(STATE_HOME, "windows")
 
 
-def record_window(session: str, **fields) -> None:
+def record_window(session: str, touch: bool = True, **fields) -> None:
     """Remember a tab so it can be opened again after the machine restarts.
 
     One file per tab: no central list to lock, and a tab that never comes
     back simply leaves its file behind for `resume` to offer or forget.
+
+    `touch` is what keeps `last_seen` meaning what it says. Writing a field
+    on a tab that is not running - which is what quitting does - must not
+    also claim the tab was alive at that moment: the stamps are the only
+    evidence of which tabs went away together, and one write across the
+    whole history files a tab closed last week under tonight's run.
     """
     if not session:
         return
@@ -48,7 +54,9 @@ def record_window(session: str, **fields) -> None:
         if os.path.exists(path):
             with open(path) as fh:
                 record = json.load(fh)
-        record.update(session=session, last_seen=time.time(), **fields)
+        record.update(session=session, **fields)
+        if touch or not record.get("last_seen"):
+            record["last_seen"] = time.time()
         record.setdefault("created", record["last_seen"])
         fd, tmp = tempfile.mkstemp(dir=windows_dir(), prefix=".win-")
         with os.fdopen(fd, "w") as fh:
@@ -74,6 +82,31 @@ def known_windows() -> list[dict]:
         except (OSError, ValueError):
             continue
     return sorted(out, key=lambda r: r.get("last_seen", 0), reverse=True)
+
+
+# How far apart two stamps can be and still have gone away together. A
+# sidebar stamps its record once a minute while it runs, so tabs that were
+# alive at the same moment sit a heartbeat or two apart; five minutes is
+# that with room to spare, and still nothing beside the gap to whatever
+# was closed earlier in the day.
+RUN_GAP = 300
+
+
+def last_run(records: list[dict] | None = None) -> list[dict]:
+    """The tabs that were open when sticky last stopped, newest first.
+
+    Nothing has to be written down at the end for this, which is the point:
+    the exits worth reopening from - a reboot, a crash, a lid closed on a
+    Friday - are exactly the ones nobody got to record. The stamps are
+    enough. Whatever stopped sticky stopped every sidebar in it at once, so
+    the tabs that were up are the ones stamped within a few heartbeats of
+    the newest, and a tab you closed hours before is hours behind them.
+    """
+    records = known_windows() if records is None else records
+    if not records:
+        return []
+    newest = max(r.get("last_seen", 0) for r in records)
+    return [r for r in records if newest - r.get("last_seen", 0) <= RUN_GAP]
 
 
 def private_dir(path: str) -> str:

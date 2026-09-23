@@ -22,18 +22,21 @@ from .commands import (
     cmd_place,
     cmd_quit,
     cmd_log,
+    cmd_marks,
     cmd_reload,
     cmd_reopen,
     cmd_restore,
     cmd_resume,
     cmd_rm,
     cmd_start,
+    cmd_trace,
     cmd_sweep,
     cmd_uncommit,
+    run_summary,
 )
 from .config import DEFAULT_SIDEBAR_WIDTH, default_virtual_rows
 from .sidebar import cmd_sidebar
-from .store import known_windows
+from .store import last_run
 from .tmux import Tmux
 from .util import die
 
@@ -119,9 +122,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("resume", help="reopen the tabs you had open before")
     p.add_argument("--all", action="store_true",
-                   help="take every remembered tab without asking")
+                   help="go through every remembered tab, not just the last "
+                        "set that was open")
     p.add_argument("--last", action="store_true",
-                   help="only the tabs that were open at the last quit")
+                   help="the tabs that were open when sticky last stopped "
+                        "(what resume does anyway)")
+    p.add_argument("--yes", "-y", action="store_true",
+                   help="do not ask: for a login item")
     p.add_argument("--detach", action="store_true")
     p.add_argument("--client")
     p.add_argument("--socket")
@@ -137,6 +144,21 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--from", dest="source_pane",
                    help="pane the picker opens beside")
     p.set_defaults(func=cmd_reopen)
+
+    p = sub.add_parser(
+        "marks", help="light up the annotated lines while scrolled back")
+    p.add_argument("--pane")
+    p.add_argument("--project")
+    p.add_argument("--store")
+    p.add_argument("--socket")
+    p.add_argument("--quiet", action="store_true")
+    p.set_defaults(func=cmd_marks)
+
+    p = sub.add_parser(
+        "trace", help="put one line in the log (internal)")
+    p.add_argument("label")
+    p.add_argument("--socket")
+    p.set_defaults(func=cmd_trace)
 
     p = sub.add_parser(
         "log", help="record what the sidebars decide, and why")
@@ -336,11 +358,16 @@ def main(argv: list[str] | None = None) -> int:
         socket = args.socket or args.top_socket
         if Tmux(socket).server_running():
             return cmd_attach(argparse.Namespace(socket=socket))
-        if known_windows() and sys.stdin.isatty():
-            answer = ask("sticky: nothing running. Reopen your tabs?", "y/n")
+        # Named, not counted: what makes this worth a yes is seeing that
+        # it is this morning's desk rather than every tab since August.
+        run = last_run()
+        if run and sys.stdin.isatty():
+            answer = ask(f"sticky: nothing running. {run_summary(run)}. "
+                         f"Reopen them?", "y/n")
             if answer == "y":
                 return cmd_resume(argparse.Namespace(
-                    socket=socket, all=False, detach=False, client=None))
+                    socket=socket, all=False, last=True, yes=True,
+                    detach=False, client=None))
     else:
         # No subcommand: this is an agent in the current directory, and
         # every argument that is not ours belongs to it.

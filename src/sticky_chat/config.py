@@ -7,7 +7,7 @@ import os
 from .clipboard import clipboard_command
 from .store import STATE_HOME, private_dir
 from .tmux import Tmux
-from .util import self_path, shell_quote
+from .util import self_path, shell_quote, terminal_size
 
 DEFAULT_SIDEBAR_WIDTH = 34
 
@@ -165,6 +165,15 @@ set -g window-status-current-style "bold"
 set -g window-status-format "#I:#{?@sticky_waiting,⧗,#{?@sticky_mark,#{?@sticky_done,#[reverse]#{@sticky_mark}#[noreverse],#{@sticky_mark}},}}#W#F"
 set -g window-status-current-format "#I:#{?@sticky_waiting,⧗,#{?@sticky_mark,#{?@sticky_done,#[reverse]#{@sticky_mark}#[noreverse],#{@sticky_mark}},}}#W#F"
 
+# Scrolling back puts the pane in copy mode, and copy mode is the one
+# place tmux will paint over a pane's own output: it styles the matches of
+# a search. So the lines you have annotated are lit while you read back -
+# see `sticky marks`. Quiet on purpose. It is there to be recognised out of
+# the corner of an eye, not read: a highlight as loud as a selection turns
+# every page you scroll through into a page of alarm.
+set -g copy-mode-match-style "bg=colour237"
+set -g copy-mode-current-match-style "bg=colour241"
+
 set -g window-status-style "dim"
 # Two lists, on two rows: agent tabs above, everything else below. The
 # second row is there only while something is on it - see `rows_needed`.
@@ -252,7 +261,24 @@ set-hook -g client-attached 'run-shell -b "@BIN@ fit --socket \\"#{socket_path}\
 # clicking it again crosses back. `{next}` wraps in a two-pane window,
 # which is what makes it a toggle rather than a one-way trip - and a target
 # cannot be a format, so the partner cannot simply be named.
-bind -T root MouseDown1StatusLeft select-pane -t "{next}"
+bind -T root MouseDown1StatusLeft { if -F "#{@sticky_log}" { run-shell -b '@BIN@ trace "click on the label at #{mouse_x},#{mouse_y} (status row #{mouse_status_line}) - crosses panes" --socket "#{socket_path}"' } ; select-pane -t "{next}" }
+
+# Clicking the status line. Rebound only to say what tmux made of the
+# click - which of the four status keys it was, where it landed, and on
+# which of the two rows - because a click that lands a column wide of a
+# tab is a click that does nothing, and from the outside that is
+# indistinguishable from one that was slow. The action each of them
+# carries is tmux's own, unchanged, and the guard is what makes it free:
+# with no log on, tmux evaluates one format and does exactly what it did
+# before.
+bind -T root MouseDown1Status { if -F "#{@sticky_log}" { run-shell -b '@BIN@ trace "click on tab #{window_index} at #{mouse_x},#{mouse_y} (status row #{mouse_status_line})" --socket "#{socket_path}"' } ; switch-client -t = }
+bind -T root MouseDown1StatusDefault { if -F "#{@sticky_log}" { run-shell -b '@BIN@ trace "click on status GAP at #{mouse_x},#{mouse_y} (status row #{mouse_status_line}) - nothing happens" --socket "#{socket_path}"' } }
+# And a click that misses the status line altogether, which from the
+# outside looks exactly like one that did nothing: it lands in a pane, and
+# the pane is where it stays.
+bind -T root MouseDown1Pane { if -F "#{@sticky_log}" { run-shell -b '@BIN@ trace "click in pane #{pane_id} (#{@sticky_role}) at #{mouse_x},#{mouse_y}" --socket "#{socket_path}"' } ; select-pane -t = ; send-keys -M }
+bind -T root MouseDown1Border { if -F "#{@sticky_log}" { run-shell -b '@BIN@ trace "click on the pane border at #{mouse_x},#{mouse_y}" --socket "#{socket_path}"' } ; select-pane -t = }
+bind -T root MouseDown1StatusRight { if -F "#{@sticky_log}" { run-shell -b '@BIN@ trace "click on status-right at #{mouse_x},#{mouse_y} - nothing happens" --socket "#{socket_path}"' } }
 
 # the wheel over the sidebar pages through the note history; everywhere else
 # this is tmux's own default binding
@@ -267,7 +293,11 @@ bind -T root WheelDownPane if -F '#{==:#{@sticky_role},sidebar}' 'send-keys -t "
 # entering or leaving copy mode is exactly when the view stops moving: wake the
 # sidebar so it re-places its notes against the settled screen, and let fit
 # decide whether the viewport is still pinned to the bottom of a tall window
-set-hook -g pane-mode-changed { if -F "#{@sticky_sidebar_pid}" { run-shell -b "kill -USR1 #{@sticky_sidebar_pid} 2>/dev/null || true" } ; run-shell -b '@BIN@ fit --socket "#{socket_path}"' }
+# Entering copy mode is the moment to light the annotated lines, and
+# leaving it costs nothing: the command does nothing for a pane that is not
+# in a mode. It is the same hook the sidebar is woken by.
+set-hook -g pane-mode-changed { if -F "#{==:#{@sticky_role},claude}" { run-shell -b '@BIN@ marks --quiet --socket "#{socket_path}" --pane "#{pane_id}"' } }
+set-hook -ga pane-mode-changed { if -F "#{@sticky_sidebar_pid}" { run-shell -b "kill -USR1 #{@sticky_sidebar_pid} 2>/dev/null || true" } ; run-shell -b '@BIN@ fit --socket "#{socket_path}"' }
 
 bind u run-shell -b '@BIN@ uncommit --quiet --socket "#{socket_path}" --pane "#{pane_id}"'
 bind U run-shell -b '@BIN@ uncommit --quiet --socket "#{socket_path}" --pane "#{pane_id}"'
@@ -319,6 +349,27 @@ def count_rows(tm) -> None:
           "2" if tm.fmt("", HAS_OTHERS).strip() else "on")
 
 
+def drop_ours(tm, when: str) -> None:
+    """Take sticky's own commands off a hook it no longer uses.
+
+    Only when every entry is one of ours - by the binary it runs or the
+    format it tests - because the hook is shared and what somebody put
+    there themselves is not ours to throw away. A server that has been
+    running since before this changed would otherwise go on doing the
+    arrival twice, once on each hook.
+    """
+    try:
+        entries = tm.run("show-options", "-g", when).splitlines()
+    except RuntimeError:
+        return
+    if not entries:
+        return
+    mine = [line for line in entries
+            if self_path() in line or HAS_OTHERS in line]
+    if len(mine) == len(entries):
+        tm.ok("set-hook", "-gu", when)
+
+
 def install_hooks(tm) -> bool:
     """Set the hooks the config file cannot carry, and say whether it took.
 
@@ -344,15 +395,45 @@ def install_hooks(tm) -> bool:
     # minute away.
     tm.ok("set-hook", "-g", "pane-exited",
           EXIT_HOOK.format(binary=self_path()))
-    tm.ok("set-hook", "-g", "after-select-window",
+    # Arriving at a tab, by every road that leads there. `after-select-window`
+    # is the obvious one and it misses the mouse entirely: tmux's own
+    # binding for clicking a tab is `switch-client`, which changes the
+    # window without selecting one, and so does the `C-g w` list. The tab
+    # would come up with its sidebar still showing the last one, until
+    # whatever that agent printed next happened to wake it - which is what
+    # "clicking a tab is slow" was. `session-window-changed` is the one hook
+    # that hears all of them, and it fires for `select-window` too, so it
+    # replaces the old one rather than joining it: twice is twice the work.
+    tm.ok("set-hook", "-g", "session-window-changed",
           ARRIVE_HOOK.format(binary=self_path()))
+    drop_ours(tm, "after-select-window")
     tm.ok("set-hook", "-g", "pane-focus-in", FOCUS_HOOK)
     # Whether there is a second row to draw. Hung off every hook that can
     # change the answer: a window opening or closing, and arriving at a
     # session that a previous client left set the other way.
+    #
+    # Appended rather than set, because two of these carry a hook of their
+    # own already - so the list has to be read back first. This runs every
+    # time a tab opens, and appending blind left one copy per tab on every
+    # hook: eleven tabs in, opening the twelfth walked every window eleven
+    # times over to answer a question with one answer.
     for when in ("after-new-window", "window-unlinked", "window-linked",
-                 "client-attached", "after-select-window"):
-        tm.ok("set-hook", "-ga", when, ROWS_HOOK)
+                 "client-attached", "session-window-changed"):
+        try:
+            # Read back by the format it tests, not by the line that was
+            # sent: tmux hands a hook back in its own spelling - `if` comes
+            # out as `if-shell` - so what went in is not what comes out.
+            entries = tm.run("show-options", "-g", when).splitlines()
+        except RuntimeError:
+            entries = []
+        mine = [line for line in entries if HAS_OTHERS in line]
+        if not mine:
+            tm.ok("set-hook", "-ga", when, ROWS_HOOK)
+        elif len(mine) > 1 and len(mine) == len(entries):
+            # Copies left by the version that appended blind. Collapsed
+            # rather than left alone, and only when every entry is one of
+            # ours, so an override of your own in the same hook survives.
+            tm.ok("set-hook", "-g", when, ROWS_HOOK)
     tm.ok("set-option", "-g", "status",
           "2" if tm.fmt("", HAS_OTHERS).strip() else "on")
     woken = tm.ok("set-hook", "-g", "pane-activity", ACTIVITY_HOOK)
@@ -424,6 +505,43 @@ def default_virtual_rows() -> int:
         return max(0, int(os.environ["STICKY_VIRTUAL_ROWS"]))
     except (KeyError, ValueError):
         return 0
+
+
+def room_for_new_windows(tm: Tmux) -> tuple[int, int]:
+    """How big to make a window nobody is looking at yet, in columns and rows.
+
+    tmux sizes an unseen window by `default-size`, which is 80x24 - and an
+    agent draws into the size it is given. Every tab `resume` opens is
+    opened detached, so each one replayed its whole conversation into 80
+    columns, 46 once the sidebar has its 34. tmux does not reflow history
+    when a window is resized later, so that wrapping is permanent: visiting
+    the tab widens the pane but leaves every replayed line broken where an
+    80-column pane broke it. A note quoting a full-width line then has
+    nothing to match - not exactly, not approximately, not ever - and the
+    agent redraws its whole interface on arrival besides.
+
+    The terminal this was typed in, or the largest client already attached
+    when it was not typed anywhere - a key binding has no terminal of its
+    own, and the clients are then the only ones who know.
+    """
+    cols, rows = 0, 0
+    for size in client_areas(tm).values():
+        rows, cols = max(rows, size[0]), max(cols, size[1])
+    if not cols or not rows:
+        cols, rows = terminal_size()
+    return max(20, cols), max(5, rows)
+
+
+def use_client_size(tm: Tmux) -> tuple[str, str]:
+    """Hold `default-size` at the room there really is, and say what that is.
+
+    Set on the server rather than passed to each window, because the option
+    is what tmux reaches for every time it opens a window with nobody
+    watching - including the ones sticky does not open itself.
+    """
+    cols, rows = room_for_new_windows(tm)
+    tm.ok("set-option", "-g", "default-size", f"{cols}x{rows}")
+    return str(cols), str(rows)
 
 
 def client_areas(tm: Tmux) -> dict[str, tuple[int, int]]:
