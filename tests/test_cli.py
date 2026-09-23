@@ -1583,6 +1583,15 @@ class TestTheHooksAreHungOnce:
         return [line for line in tm.hooks.get(when, [])
                 if sticky.HAS_OTHERS in line]
 
+    def test_arriving_wakes_only_the_tab_you_arrived_at(self, sticky):
+        """Nine sidebars woken at once is nine processes and two dozen tmux
+        calls through a single-threaded server in the same instant. The
+        other eight tabs did not move."""
+        tm = self.FakeTmux()
+        sticky.install_hooks(tm)
+        arrive = "\n".join(tm.hooks["session-window-changed"])
+        assert "--wake" in arrive and "#{window_id}" in arrive, arrive
+
     def test_arriving_at_a_tab_is_heard_however_you_got_there(self, sticky):
         """`after-select-window` misses the mouse: tmux's own binding for
         clicking a tab is `switch-client`, which changes the window without

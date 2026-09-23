@@ -53,6 +53,7 @@ from .cli import GLOBAL_FLAGS, OUR_FLAGS, build_parser, main, split_our_flags
 from .clipboard import clipboard_command, to_clipboard
 from .commands import (
     DISMISS_GRACE,
+    MARK_CHARS,
     MARK_QUOTES,
     YEAR,
     ago,

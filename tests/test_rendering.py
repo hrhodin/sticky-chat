@@ -643,6 +643,14 @@ class TestLightingTheAnnotatedLines:
         nobody annotated is worse than lighting up none."""
         assert not sticky.mark_pattern([{"rows": ["ab"]}])
 
+    def test_a_quote_is_cut_to_its_distinctive_head(self, sticky):
+        """The search runs inside the tmux server and blocks it while it
+        runs, so the expression it is given is kept short: a first line is
+        distinctive long before its fortieth character."""
+        row = "x" * 200
+        pattern = sticky.mark_pattern([{"rows": [row]}])
+        assert len(pattern) == sticky.MARK_CHARS
+
     def test_it_does_not_grow_without_end(self, sticky):
         """A regular expression the width of a hundred notes is one tmux
         runs against every row it draws."""

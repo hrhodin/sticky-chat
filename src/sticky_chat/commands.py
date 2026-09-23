@@ -1647,9 +1647,21 @@ def cmd_reopen(args) -> int:
 
 
 # What a quote can be before it is not worth searching for, and how many
-# of them one search will carry. A regular expression the width of a
-# hundred notes is one tmux has to run against every row it draws.
-MARK_QUOTES = 40
+# of them one search will carry.
+#
+# The search runs inside the tmux server, which does one thing at a time,
+# and it runs over the whole scrollback: while it is going, every pane and
+# every keystroke waits for it. Measured against an 1867-row history, forty
+# whole rows of quote came to a 6599-character expression and blocked the
+# server for 1690ms - on every entry into copy mode, which is every turn of
+# the wheel. Eight quotes of forty characters is a tenth of that pattern and
+# a tenth of the wait, and what it costs is the ninth-oldest note on screen
+# not lighting up. The first line of a quote is distinctive long before its
+# fortieth character.
+MARK_QUOTES = 8
+
+
+MARK_CHARS = 40
 
 
 def mark_pattern(notes: list[dict]) -> str:
@@ -1666,7 +1678,7 @@ def mark_pattern(notes: list[dict]) -> str:
         if note.get("deleted"):
             continue
         rows = note.get("rows") or [note.get("quote", "")]
-        line = (rows[0] or "").strip()
+        line = (rows[0] or "").strip()[:MARK_CHARS]
         if len(line) < 3 or line in seen:
             # Two words are matched all over a pane and light up rows that
             # nobody annotated, which is worse than lighting up none.
@@ -2152,7 +2164,7 @@ def cmd_fit(args) -> int:
         listing = tm.run("list-panes", "-a", "-F",
                          "#{pane_id}\t#{@sticky_role}\t#{@sticky_width}\t"
                          "#{window_zoomed_flag}\t#{pane_pid}\t#{pane_width}\t"
-                         "#{@sticky_log}")
+                         "#{@sticky_log}\t#{window_id}")
     except RuntimeError:
         return 0
     started = time.monotonic()
@@ -2161,12 +2173,19 @@ def cmd_fit(args) -> int:
     # it is where the timeline of one begins.
     logging = ""
     woken = []
+    # Arriving at a tab changes that tab's geometry and nobody else's, so
+    # only its sidebar has anything to look at again. Waking all nine put
+    # nine processes and their two dozen tmux calls through a single-threaded
+    # server at the same instant, which is most of the third of a second
+    # between the click and the last sidebar drawing.
+    only = getattr(args, "wake", "") or ""
     for line in listing.splitlines():
-        parts = [*line.split("\t"), "", "", "", "", "", "", ""][:7]
+        parts = [*line.split("\t"), "", "", "", "", "", "", "", ""][:8]
         logging = logging or parts[6].strip()
         if parts[1] != "sidebar":
             continue
-        woken.append(parts[4])
+        if not only or parts[7].strip() == only:
+            woken.append(parts[4])
         if parts[3] == "1":
             continue
         try:
@@ -2177,7 +2196,8 @@ def cmd_fit(args) -> int:
             continue          # already that wide: this runs on every switch
         tm.ok("resize-pane", "-t", parts[0], "-x", str(width))
     if logging:
-        log_line(logging, f"fit: began, {len(woken)} sidebars to wake")
+        log_line(logging, f"fit: began, {len(woken)} sidebar(s) to wake"
+                          f"{' (this tab only)' if only else ''}")
     fit_windows(tm)
     use_client_size(tm)     # a tab opened later is opened at this size
     pin_clients(tm)

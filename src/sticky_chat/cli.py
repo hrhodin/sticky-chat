@@ -187,6 +187,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("fit", help="restore the sidebar width (internal)")
     p.add_argument("--socket")
+    p.add_argument("--wake", help="only wake the sidebars of this window")
     p.set_defaults(func=cmd_fit)
 
     p = sub.add_parser("attach", help="re-attach to the sticky session")

@@ -261,7 +261,7 @@ set-hook -g client-attached 'run-shell -b "@BIN@ fit --socket \\"#{socket_path}\
 # clicking it again crosses back. `{next}` wraps in a two-pane window,
 # which is what makes it a toggle rather than a one-way trip - and a target
 # cannot be a format, so the partner cannot simply be named.
-bind -T root MouseDown1StatusLeft { if -F "#{@sticky_log}" { run-shell -b '@BIN@ trace "click on the label at #{mouse_x},#{mouse_y} (status row #{mouse_status_line}) - crosses panes" --socket "#{socket_path}"' } ; select-pane -t "{next}" }
+bind -T root MouseDown1StatusLeft select-pane -t "{next}"
 
 # Clicking the status line. Rebound only to say what tmux made of the
 # click - which of the four status keys it was, where it landed, and on
@@ -272,13 +272,6 @@ bind -T root MouseDown1StatusLeft { if -F "#{@sticky_log}" { run-shell -b '@BIN@
 # with no log on, tmux evaluates one format and does exactly what it did
 # before.
 bind -T root MouseDown1Status { if -F "#{@sticky_log}" { run-shell -b '@BIN@ trace "click on tab #{window_index} at #{mouse_x},#{mouse_y} (status row #{mouse_status_line})" --socket "#{socket_path}"' } ; switch-client -t = }
-bind -T root MouseDown1StatusDefault { if -F "#{@sticky_log}" { run-shell -b '@BIN@ trace "click on status GAP at #{mouse_x},#{mouse_y} (status row #{mouse_status_line}) - nothing happens" --socket "#{socket_path}"' } }
-# And a click that misses the status line altogether, which from the
-# outside looks exactly like one that did nothing: it lands in a pane, and
-# the pane is where it stays.
-bind -T root MouseDown1Pane { if -F "#{@sticky_log}" { run-shell -b '@BIN@ trace "click in pane #{pane_id} (#{@sticky_role}) at #{mouse_x},#{mouse_y}" --socket "#{socket_path}"' } ; select-pane -t = ; send-keys -M }
-bind -T root MouseDown1Border { if -F "#{@sticky_log}" { run-shell -b '@BIN@ trace "click on the pane border at #{mouse_x},#{mouse_y}" --socket "#{socket_path}"' } ; select-pane -t = }
-bind -T root MouseDown1StatusRight { if -F "#{@sticky_log}" { run-shell -b '@BIN@ trace "click on status-right at #{mouse_x},#{mouse_y} - nothing happens" --socket "#{socket_path}"' } }
 
 # the wheel over the sidebar pages through the note history; everywhere else
 # this is tmux's own default binding
@@ -331,7 +324,8 @@ EXIT_HOOK = ('run-shell -b "{binary} sweep --quiet '
 # Arriving at a tab answers "has it finished", so the mark goes. Both
 # actions in one value rather than appended: `install_hooks` runs on every
 # start, and appending would grow the list a copy at a time.
-ARRIVE_HOOK = ('run-shell -b "{binary} fit --socket \\"#{{socket_path}}\\"" ; '
+ARRIVE_HOOK = ('run-shell -b "{binary} fit --socket \\"#{{socket_path}}\\" '
+               '--wake \\"#{{window_id}}\\"" ; '
                'set-option -w -u @sticky_done')
 FOCUS_HOOK = "set-option -w -u @sticky_done"
 
@@ -347,6 +341,35 @@ def count_rows(tm) -> None:
     """
     tm.ok("set-option", "-g", "status",
           "2" if tm.fmt("", HAS_OTHERS).strip() else "on")
+
+
+def dedupe_appends(tm, option: str, value: str) -> None:
+    """Leave one copy of a value the config appends on every reload.
+
+    `set -as` is how you add to a list without trampling what somebody else
+    put there, and the config is sourced afresh every time sticky reloads -
+    so the same entry lands again on each one. Thirty copies of `*:RGB` is
+    what a day of reloading looks like.
+    """
+    try:
+        entries = [line.split(" ", 1) for line in
+                   tm.run("show-options", "-s", option).splitlines()]
+    except RuntimeError:
+        return
+    values = [rest.strip().strip('"') for name, rest in entries
+              if len(entries[0]) == 2 and rest]
+    if values.count(value) < 2:
+        return
+    kept, seen = [], False
+    for one in values:
+        if one == value:
+            if seen:
+                continue
+            seen = True
+        kept.append(one)
+    tm.ok("set-option", "-su", option)
+    for one in kept:
+        tm.ok("set-option", "-sa", option, "," + one)
 
 
 def drop_ours(tm, when: str) -> None:
@@ -438,6 +461,7 @@ def install_hooks(tm) -> bool:
           "2" if tm.fmt("", HAS_OTHERS).strip() else "on")
     woken = tm.ok("set-hook", "-g", "pane-activity", ACTIVITY_HOOK)
     tm.ok("set-option", "-g", "@sticky_wake", "1" if woken else "0")
+    dedupe_appends(tm, "terminal-overrides", "*:RGB")
     count_rows(tm)
     return woken
 
