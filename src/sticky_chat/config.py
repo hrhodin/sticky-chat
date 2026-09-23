@@ -132,7 +132,14 @@ set -as terminal-overrides ",*:RGB"
 # palette every terminal has, and it is the user's own besides. Older tmux
 # has no such option, so the set is quiet.
 set -sq theme terminal
-set -s escape-time 0
+# How long tmux waits for the rest of an escape sequence before deciding the
+# Escape was pressed on its own. Zero is the setting everybody copies to make
+# Esc feel instant in vim, and it is a trap: an arrow key, a function key and
+# every mouse event are escape sequences too, and one that arrives in two
+# reads - which is what a busy terminal does - is torn in half and thrown
+# away. Ten milliseconds is below anything a hand can feel and long enough
+# that the rest of a sequence has always arrived.
+set -s escape-time 10
 set -g history-limit 200000
 set -g mouse on
 set -s extended-keys on
