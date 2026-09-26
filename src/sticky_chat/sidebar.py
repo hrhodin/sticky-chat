@@ -29,6 +29,7 @@ from .util import (
     die,
     log_line,
     read_key,
+    reads_like_a_notice,
     reset_notice,
     self_path,
     terminal_size,
@@ -224,6 +225,20 @@ HELP_SECTIONS = help_sections()        # the default profile's, for callers
 
 
 # ------------------------------------------------------------------- help
+
+
+def arms_itself(tm: Tmux) -> bool:
+    """Whether a tab may set its own clock when an agent runs out of turns.
+
+    On unless `@sticky_continue` says otherwise, and read at the moment a
+    tab would arm rather than held in hand, so turning it off takes hold
+    without a reload. Asked once per notice, which is rarely.
+    """
+    try:
+        said = tm.run("show-options", "-gqv", "@sticky_continue").strip()
+    except RuntimeError:
+        return True
+    return said.lower() not in ("off", "0", "no", "false")
 
 
 def typing_through(key: str) -> bool:
@@ -1122,6 +1137,20 @@ def cmd_sidebar(args) -> int:
                                        joined=True))
                     except (RuntimeError, ValueError):
                         said, saw = "", ""
+                    # Only ever from a line that reads like a notice. The
+                    # words this is looked for by - "limit reached", "usage
+                    # limit", and a clock after them - are words an agent
+                    # also writes *about* limits, in a paragraph, and arming
+                    # on one of those types a word into a tab that was
+                    # waiting for nothing. A notice is short and ends in its
+                    # clock; a sentence about one runs on. See NOTICE_WIDTH.
+                    if saw and not reads_like_a_notice(saw):
+                        said = ""
+                    # And nothing at all where it has been turned off: some
+                    # people would rather come back to a tab that stopped
+                    # than to one that carried on without them.
+                    if said and not arms_itself(tm):
+                        said = ""
                     # The same notice twice is one notice. An agent that got
                     # past its limit leaves the old one on screen above the
                     # answer, and a clock set off that would sit out a whole

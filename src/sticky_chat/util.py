@@ -383,6 +383,27 @@ DAY_SAID = re.compile(r"\b(" + "|".join(MONTHS) + r")"
 RESET_ROWS = 14
 
 
+# What a notice can be as wide as. A limit notice is a line an agent prints
+# and then stops - short, and the clock is the end of it. Prose that happens
+# to mention a limit and a time is not one, and this is the one thing that
+# tells them apart without reading English: a sentence about limits runs on,
+# a notice does not. It only matters where the answer is acted on without
+# anybody seeing it, so `reset_notice` reports the row and the caller that
+# arms a clock unattended is the one that measures it.
+NOTICE_WIDTH = 100
+
+
+def reads_like_a_notice(row: str) -> bool:
+    """Whether that row is an agent saying it has stopped, or prose saying so.
+
+    Length is the whole of it, which sounds crude and is not: the words are
+    the same either way, and no reading of them separates a notice from a
+    sentence that mentions one. What separates them is that a notice is the
+    last thing a tab printed before it went quiet, and it is short.
+    """
+    return bool(row.strip()) and len(row.strip()) <= NOTICE_WIDTH
+
+
 def reset_notice(rows: list[str],
                  now: float | None = None) -> tuple[str, str]:
     """The time an agent said its limit resets, written as `--at` takes it.

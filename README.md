@@ -138,6 +138,22 @@ hour in the footer beneath it. Click that row to call it off - it stays
 there struck out, so you can see what it was going to do and click again to
 put it back - or `t` then `cancel` to be rid of it.
 
+What it arms on is a line that says a limit and gives a clock, and only a
+short one: those same words turn up in a paragraph an agent writes *about*
+limits, and a tab that armed on one of those would type into a tab that was
+waiting for nothing. A notice is the last thing a tab prints before it goes
+quiet, and it is short; a sentence about one runs on. To have none of it:
+
+```sh
+# ~/.sticky/user.conf
+set -g @sticky_continue off
+```
+
+That takes hold at the next notice, without a reload. A deadline that falls
+while the machine is asleep is not lost - the clock is a wall-clock time,
+compared on the first pass after the machine wakes, so it fires then rather
+than never.
+
 The tab list at the bottom says which agent is in which tab, one character
 in front of the name: `✦` Claude Code, `◆` Codex, `✧` Gemini, `▲` Antigravity,
 `$` a shell, `•` anything else. The mark is highlighted while a tab is
@@ -499,6 +515,7 @@ anything there wins:
 # ~/.sticky/user.conf
 set -g status-style "bg=colour236,fg=colour250"
 set -g status-right "#[fg=cyan]C-g s#[default] send  #{session_name} "
+set -g @sticky_continue off   # never send `continue` on a limit of its own accord
 ```
 
 The status bar sets no colours of its own — it takes the terminal's

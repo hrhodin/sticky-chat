@@ -1642,6 +1642,44 @@ class TestTheHooksAreHungOnce:
         assert len(self.mine(sticky, tm, "window-linked")) == 1
 
 
+class TestATabThatSetsItsOwnClock:
+    """An agent that runs out of turns says when it will have them back, and
+    a tab can wait for that and send one word. What it must not do is take
+    a paragraph *about* limits for a notice and type into a tab that was
+    waiting for nothing.
+    """
+
+    class FakeTmux:
+        def __init__(self, said=""):
+            self.socket, self.said = "test", said
+
+        def run(self, *args):
+            return self.said
+
+    NOTICE = "5-hour limit reached \u2219 resets 8pm"
+    PROSE = ("If the agent hits its weekly limit it resets at 8pm, so the "
+             "clock waits until then and sends one word to carry on with")
+
+    def test_a_notice_reads_like_one(self, sticky):
+        assert sticky.reads_like_a_notice(self.NOTICE)
+        assert sticky.reset_notice([self.NOTICE])[0], "and it is read"
+
+    def test_a_sentence_about_limits_does_not(self, sticky):
+        """The words are the same either way - the difference is that a
+        notice is the last thing a tab printed, and it is short."""
+        assert len(self.PROSE) > sticky.NOTICE_WIDTH
+        assert not sticky.reads_like_a_notice(self.PROSE)
+        assert sticky.reset_notice([self.PROSE])[0], "the clock is still read"
+
+    def test_nothing_arms_when_it_is_turned_off(self, sticky):
+        for said in ("off", "OFF", "0", "no", "false"):
+            assert not sticky.arms_itself(self.FakeTmux(said)), said
+
+    def test_it_arms_by_default(self, sticky):
+        for said in ("", "on", "yes", "anything else"):
+            assert sticky.arms_itself(self.FakeTmux(said)), said
+
+
 class TestTheLastRunOfTabs:
     """Which tabs went away together, read off the stamps their sidebars
     left behind.
