@@ -17,6 +17,7 @@ from .tmux import Tmux
 from .util import (
     BOLD,
     CLOCK_HIT,
+    COL_ALERT,
     COL_COMMITTED,
     COL_FOOTER,
     COL_PENDING,
@@ -539,11 +540,15 @@ def foot_lines(beneath: list[dict], width: int, foot_h: int,
     return out[:foot_h]
 
 
+GRABBED_SAID = "agent has the mouse \u00b7 drag marks"
+
+
 def build_frame(placed: list[dict], width: int, height: int,
                 scroll: int = 0, hits: list | None = None,
                 top: int = 0, hint: str | None = None,
                 cursor: str | None = None, due: float = 0.0,
-                saying: str = "", struck: bool = False) -> list[str]:
+                saying: str = "", struck: bool = False,
+                grabbed: bool = False) -> list[str]:
     """One rendered line per sidebar row, aligned with the Claude pane.
 
     A note keeps the row its text is on, so the aligned part is drawn in
@@ -555,7 +560,8 @@ def build_frame(placed: list[dict], width: int, height: int,
     pending = sum(1 for p in placed if p["note"]["status"] == "pending"
                   and not p["note"].get("deleted"))
     coming = due_line(due, saying, pending, struck)
-    body_h = max(1, height - (2 if hint else 1) - (1 if coming else 0))
+    body_h = max(1, height - (2 if hint else 1) - (1 if coming else 0)
+                 - (1 if grabbed else 0))
     text_w = width - 2
     top = max(0, min(top, body_h - 1))
     view_h = body_h - top
@@ -735,6 +741,11 @@ def build_frame(placed: list[dict], width: int, height: int,
         frame.append(f"{COL_PENDING}{truncate(coming, width)}{RESET}")
     if hint:
         frame.append(f"{COL_FOOTER}{truncate(hint, width)}{RESET}")
+    if grabbed:
+        # Not an error and nothing is broken: the agent asked tmux for the
+        # mouse, which changes what a click does and nothing else would say
+        # so. Red because it is about the pane rather than about the notes.
+        frame.append(f"{COL_ALERT}{truncate(GRABBED_SAID, width)}{RESET}")
     # What the band below actually holds, which is not what `placed` says:
     # a note whose row the band took is listed there too.
     frame.append(f"{COL_FOOTER}"
@@ -911,7 +922,8 @@ def cmd_sidebar(args) -> int:
                     alive, raw, view = tm.formats(
                         (pane, "#{pane_id}\t#{pane_in_mode}\t#{window_active}"
                          "\t#{@sticky_send_at}\t#{@sticky_send_at_off}"
-                         "\t#{@sticky_log}\t#{pane_width}x#{pane_height}"),
+                         "\t#{@sticky_log}\t#{pane_width}x#{pane_height}"
+                         "\t#{mouse_any_flag}"),
                         (self_pane, "#{pane_in_mode}\t#{window_offset_y}"),
                         (pane, VIEW_FORMAT))
                     mode, _, offset = raw.partition("\t")
@@ -920,7 +932,8 @@ def cmd_sidebar(args) -> int:
                     alive, view = tm.formats(
                         (pane, "#{pane_id}\t#{pane_in_mode}\t#{window_active}"
                          "\t#{@sticky_send_at}\t#{@sticky_send_at_off}"
-                         "\t#{@sticky_log}\t#{pane_width}x#{pane_height}"),
+                         "\t#{@sticky_log}\t#{pane_width}x#{pane_height}"
+                         "\t#{mouse_any_flag}"),
                         (pane, VIEW_FORMAT))
             except RuntimeError:
                 break              # before 3.8, asking about a gone pane errors
@@ -930,7 +943,14 @@ def cmd_sidebar(args) -> int:
             due, _, stood = due.partition("\t")
             stood, _, logging = stood.partition("\t")
             logging, _, size = logging.partition("\t")
+            size, _, grabbed = size.partition("\t")
             logging, size = logging.strip(), size.strip()
+            # The agent has asked tmux for the mouse - Claude Code does while
+            # it draws the view with its own clickable parts. Worth saying,
+            # because it changes what a click does and nothing else would
+            # tell you: the drag is still ours (see the config), the click is
+            # the agent's, and alt hands it a drag when it wants one.
+            grabbed = grabbed.strip() == "1"
             # `<when>:<tab>:<what>`. With nothing to say it is the pending
             # notes that go; with a word, that word - the two want the same
             # clock, the same footer and the same way of being called off.
@@ -1106,6 +1126,9 @@ def cmd_sidebar(args) -> int:
                                  "x": 0, "onscreen": True})
                     frame.append(
                         f"{COL_PENDING}{truncate(coming, width)}{RESET}")
+                if grabbed:
+                    frame.append(
+                        f"{COL_ALERT}{truncate(GRABBED_SAID, width)}{RESET}")
                 frame.append(f"{COL_FOOTER}"
                              f"{truncate(footer_text(placed, due=deadline, saying=saying), width)}"
                              f"{RESET}")
@@ -1123,7 +1146,7 @@ def cmd_sidebar(args) -> int:
                     hits.clear()
                     frame = build_frame(placed, width, height, scroll, hits,
                                         top, hint, cursor, showing, saying,
-                                        struck)
+                                        struck, grabbed)
                     shown = [h["id"] for h in hits]
                     if cursor is None or cursor in shown or not shown:
                         break

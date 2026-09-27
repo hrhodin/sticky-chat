@@ -31,6 +31,12 @@ COL_FUZZY = "\x1b[38;5;208m"
 
 COL_FOOTER = "\x1b[36m"
 
+# Red, and the bright one, for the single thing the sidebar says that is
+# about the pane rather than about the notes: that the agent has asked for
+# the mouse. It is not an error and nothing is broken, but it changes what a
+# click does, and a line the colour of the rest would be read as furniture.
+COL_ALERT = "\x1b[91m"
+
 
 # What the sidebar's clock row answers to when it is clicked. Notes carry
 # uuids, so nothing else in a hit list can be mistaken for it.

@@ -266,15 +266,23 @@ class TestGeneratedConfig:
         sticky.private_dir(str(home))
         assert oct(home.stat().st_mode)[-3:] == "700"
 
-    def test_alt_drag_marks_when_the_agent_has_the_mouse(self, config):
-        """Claude Code's multi-agent view asks tmux for every mouse event, so
-        a plain drag over that pane is the agent's. Alt says otherwise - and
-        only over the agent's pane, since alt-drag moves a pane everywhere
-        else."""
+    def test_a_drag_over_the_agent_is_always_a_selection(self, config):
+        """Claude Code's multi-agent view asks tmux for every mouse event,
+        which left a drag over that pane belonging to the agent - and
+        dragging over that pane is the one gesture this program is about."""
+        line = next(ln for ln in config
+                    if ln.startswith("bind -T root MouseDrag1Pane"))
+        agent, rest = line.split("' {", 1)[1].split("} {", 1)
+        assert "copy-mode -M" in agent, agent
+        assert "mouse_any_flag" not in agent, "the agent's wishes do not count"
+        assert "mouse_any_flag" in rest, "everywhere else keeps tmux's rule"
+
+    def test_alt_hands_one_drag_back_to_the_agent(self, config):
+        """For its own scrollbars, or selecting in the box you type in."""
         line = next(ln for ln in config
                     if ln.startswith("bind -T root M-MouseDrag1Pane"))
         assert "@sticky_role},claude" in line
-        assert "copy-mode -M" in line and "move-pane -M" in line
+        assert "send-keys -M" in line and "move-pane -M" in line
 
     def test_your_own_overrides_are_sourced_last(self, config):
         assert any(line.startswith("source-file -q") for line in config)

@@ -664,6 +664,32 @@ class TestLightingTheAnnotatedLines:
                 == sticky.MARK_QUOTES)
 
 
+class TestWhenTheAgentHasTheMouse:
+    """Claude Code asks tmux for every mouse event while it draws the view
+    with its own clickable parts. Nothing is broken and it is not an error,
+    but a click goes to the agent from then on and nothing else would say
+    so - which cost somebody an afternoon of thinking marking was gone."""
+
+    def rows(self):
+        return [placed(2, "a", "a note")]
+
+    def test_it_says_so_in_red_above_the_footer(self, sticky):
+        frame = sticky.build_frame(self.rows(), 34, 12, grabbed=True)
+        assert sticky.COL_ALERT in frame[-2], frame[-2]
+        assert "drag marks" in plain(frame[-2])
+        assert "pending" in plain(frame[-1]), "the footer keeps the last row"
+
+    def test_it_says_nothing_when_the_mouse_is_ours(self, sticky):
+        frame = sticky.build_frame(self.rows(), 34, 12)
+        assert not any(sticky.COL_ALERT in line for line in frame)
+
+    def test_the_row_comes_out_of_the_map_not_the_frame(self, sticky):
+        """Every row it takes is a row the map gives back, so the frame is
+        the height it was asked for either way."""
+        assert (len(sticky.build_frame(self.rows(), 34, 12, grabbed=True))
+                == len(sticky.build_frame(self.rows(), 34, 12)))
+
+
 class TestWhatCountsAsOutput:
     """Codex draws snow around its prompt box, for ever. A tab that animates
     is never quiet, and "it printed something and then went quiet" is the

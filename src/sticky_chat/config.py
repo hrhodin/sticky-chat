@@ -268,15 +268,23 @@ set-hook -g client-attached 'run-shell -b "@BIN@ fit --socket \\"#{socket_path}\
 # clicking it again crosses back. `{next}` wraps in a two-pane window,
 # which is what makes it a toggle rather than a one-way trip - and a target
 # cannot be a format, so the partner cannot simply be named.
-# Marking when the agent has taken the mouse. Claude Code draws its
-# multi-agent view on the alternate screen and asks tmux for every mouse
-# event to make it clickable, so a plain drag over that pane is the agent's
-# and never becomes a selection - which reads as "I cannot mark things any
-# more". Alt held down says the drag is for tmux: it starts a selection at
-# the mouse, and from there the copy-mode bindings turn it into a note like
-# any other. `move-pane -M`, which is what Alt-drag does by default, is left
-# to every other pane; the agent's is where the clash is.
-bind -T root M-MouseDrag1Pane if -F '#{==:#{@sticky_role},claude}' 'copy-mode -M' 'move-pane -M'
+# Dragging over the agent's pane is sticky's, whatever the agent asked for.
+# Claude Code draws its multi-agent view on the alternate screen and asks
+# tmux for every mouse event so its own bits are clickable; tmux then hands
+# a drag to the agent and it never becomes a selection, which reads as "I
+# cannot mark things any more" and says nothing about why. Dragging over
+# that pane is the one gesture this whole program is about, so it is taken
+# back - and only the drag. A click is still the agent's, so what it drew to
+# be clicked stays clickable.
+#
+# Already in a mode is left alone: there the copy-mode table owns the drag
+# and is where the note is made. Every other pane keeps tmux's own rule.
+bind -T root MouseDrag1Pane if -F '#{==:#{@sticky_role},claude}' { if -F '#{pane_in_mode}' 'send-keys -M' 'copy-mode -M' } { if -F '#{||:#{pane_in_mode},#{mouse_any_flag}}' 'send-keys -M' 'copy-mode -M' }
+
+# ...and alt hands one drag back, for an agent that wants it: its own
+# scrollbars, or selecting inside the box you type in. `move-pane -M`, which
+# is what alt-drag does by default, is left to every other pane.
+bind -T root M-MouseDrag1Pane if -F '#{==:#{@sticky_role},claude}' 'send-keys -M' 'move-pane -M'
 
 bind -T root MouseDown1StatusLeft select-pane -t "{next}"
 

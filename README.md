@@ -269,7 +269,7 @@ tmux keeps whatever prefix you configured.
 | `C-g z` `C-g d` | zoom the pane, detach (stop looking; nothing stops) |
 | `C-g Q` | quit: close every window and stop the agent sessions |
 | `C-g [` | scroll back through the output |
-| `alt`-drag | mark while the agent has the mouse — see below |
+| `alt`-drag | hand the agent one drag, when it wants the mouse itself |
 
 Over the chat pane, drag with the mouse to note a selection, or press `N`
 in copy mode. **Selecting copies**, in either pane and whether or not the
@@ -278,16 +278,21 @@ mode copies the live selection again, wherever you are, and leaves it
 highlighted, and Ctrl-C in the note prompt copies and closes without
 saving anything.
 
-An agent can take the mouse for itself. Claude Code draws its multi-agent
-view — the one with `\u2190 for agents` in the footer and things you click —
-on the alternate screen, and asks tmux for every mouse event so that those
-things *are* clickable. A plain drag over that pane is then the agent's, and
-never becomes a selection: marking looks broken. Two ways through. **Hold
-alt** and the drag is tmux's again, selection and note and all. Or press
-`C-g [` first: in copy mode tmux owns the mouse whatever the agent wanted,
-and dragging works as it always did. Leaving that view — it is a mode of the
-agent's, not a setting of sticky's — puts the pane back on the normal screen
-and hands the mouse back.
+An agent can ask for the mouse. Claude Code does while it draws its
+multi-agent view — the one with `\u2190 for agents` in the footer and things
+you click — on the alternate screen, so that those things *are* clickable.
+Dragging over that pane is the one gesture this whole program is about, so
+sticky keeps it: a drag still marks, whatever the agent asked for. Only the
+drag, though — a **click** is still the agent's, so what it drew to be
+clicked stays clickable, and **alt**-drag hands it a drag as well, for its
+own scrollbars or for selecting inside the box you type in.
+
+While that is on, the sidebar says so in red above its footer:
+`agent has the mouse · drag marks`. Nothing is broken and it is not an
+error; it is the one thing the sidebar says about the pane rather than about
+the notes, and it is there because a click behaving differently is otherwise
+unaccountable. It is a mode of the agent's, not a setting of sticky's, so it
+goes when you leave that view.
 
 Scrolled back, the lines you have already annotated are lit. Copy mode is
 the one place tmux will paint over a pane's own output — it colours the
