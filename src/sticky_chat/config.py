@@ -281,10 +281,13 @@ set-hook -g client-attached 'run-shell -b "@BIN@ fit --socket \\"#{socket_path}\
 # and is where the note is made. Every other pane keeps tmux's own rule.
 bind -T root MouseDrag1Pane if -F '#{==:#{@sticky_role},claude}' { if -F '#{pane_in_mode}' 'send-keys -M' 'copy-mode -M' } { if -F '#{||:#{pane_in_mode},#{mouse_any_flag}}' 'send-keys -M' 'copy-mode -M' }
 
-# ...and alt hands one drag back, for an agent that wants it: its own
-# scrollbars, or selecting inside the box you type in. `move-pane -M`, which
-# is what alt-drag does by default, is left to every other pane.
-bind -T root M-MouseDrag1Pane if -F '#{==:#{@sticky_role},claude}' 'send-keys -M' 'move-pane -M'
+
+# ...and alt-drag is the way out, for any program that wants the mouse
+# itself: its own scrollbars, its own selection, whatever it draws that a
+# drag means something to. Held down, the drag goes through untouched. Where
+# nothing has asked for the mouse there is nothing to hand it to, so that
+# keeps `move-pane -M`, which is what alt-drag does in tmux's own hands.
+bind -T root M-MouseDrag1Pane if -F '#{mouse_any_flag}' 'send-keys -M' 'move-pane -M'
 
 bind -T root MouseDown1StatusLeft select-pane -t "{next}"
 

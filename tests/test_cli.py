@@ -277,11 +277,14 @@ class TestGeneratedConfig:
         assert "mouse_any_flag" not in agent, "the agent's wishes do not count"
         assert "mouse_any_flag" in rest, "everywhere else keeps tmux's rule"
 
-    def test_alt_hands_one_drag_back_to_the_agent(self, config):
-        """For its own scrollbars, or selecting in the box you type in."""
+    def test_alt_drag_goes_through_to_whatever_wants_the_mouse(self, config):
+        """The way out, for a program with its own scrollbars or its own
+        selection - and only where something has actually asked for the
+        mouse, since elsewhere there is nothing to hand it to and alt-drag
+        is tmux's own way to move a pane."""
         line = next(ln for ln in config
                     if ln.startswith("bind -T root M-MouseDrag1Pane"))
-        assert "@sticky_role},claude" in line
+        assert "mouse_any_flag" in line
         assert "send-keys -M" in line and "move-pane -M" in line
 
     def test_your_own_overrides_are_sourced_last(self, config):

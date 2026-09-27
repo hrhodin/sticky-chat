@@ -269,7 +269,7 @@ tmux keeps whatever prefix you configured.
 | `C-g z` `C-g d` | zoom the pane, detach (stop looking; nothing stops) |
 | `C-g Q` | quit: close every window and stop the agent sessions |
 | `C-g [` | scroll back through the output |
-| `alt`-drag | hand the agent one drag, when it wants the mouse itself |
+| `alt`-drag | let the drag through to a program that wants the mouse itself |
 
 Over the chat pane, drag with the mouse to note a selection, or press `N`
 in copy mode. **Selecting copies**, in either pane and whether or not the
@@ -279,20 +279,23 @@ highlighted, and Ctrl-C in the note prompt copies and closes without
 saving anything.
 
 An agent can ask for the mouse. Claude Code does while it draws its
-multi-agent view — the one with `\u2190 for agents` in the footer and things
+multi-agent view — the one with `← for agents` in the footer and things
 you click — on the alternate screen, so that those things *are* clickable.
 Dragging over that pane is the one gesture this whole program is about, so
 sticky keeps it: a drag still marks, whatever the agent asked for. Only the
 drag, though — a **click** is still the agent's, so what it drew to be
-clicked stays clickable, and **alt**-drag hands it a drag as well, for its
-own scrollbars or for selecting inside the box you type in.
+clicked stays clickable, and **alt**-drag lets a drag through untouched,
+for a program with its own scrollbars or its own selection. That last one is
+not about agents: it applies wherever something has asked for the mouse, and
+where nothing has, alt-drag still moves a pane as it does in tmux's own
+hands.
 
-While that is on, the sidebar says so in red above its footer:
-`agent has the mouse · drag marks`. Nothing is broken and it is not an
-error; it is the one thing the sidebar says about the pane rather than about
-the notes, and it is there because a click behaving differently is otherwise
-unaccountable. It is a mode of the agent's, not a setting of sticky's, so it
-goes when you leave that view.
+It is a mode of the agent's rather than a setting of sticky's, so it goes
+when you leave that view. Two things do behave differently while it is up,
+both the agent's doing: the wheel scrolls what the agent draws instead of
+entering copy mode, and the alternate screen has no scrollback, so notes
+above what is on screen stay in the band until the pane comes back to the
+normal buffer — the footer's `↑ N above` is counting them.
 
 Scrolled back, the lines you have already annotated are lit. Copy mode is
 the one place tmux will paint over a pane's own output — it colours the
