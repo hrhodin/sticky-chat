@@ -186,6 +186,7 @@ from .sidebar import (
     how_long,
     note_bullet,
     note_style,
+    still_limited,
     to_log,
     typing_through,
     with_close,
@@ -251,6 +252,7 @@ from .util import (
     twenty_four_hour,
     visible,
     when_to_send,
+    without_animation,
     wrap,
 )
 

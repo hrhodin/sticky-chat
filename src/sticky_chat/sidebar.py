@@ -35,6 +35,7 @@ from .util import (
     truncate,
     visible,
     when_to_send,
+    without_animation,
     wrap,
 )
 
@@ -224,6 +225,27 @@ HELP_SECTIONS = help_sections()        # the default profile's, for callers
 
 
 # ------------------------------------------------------------------- help
+
+
+# How often the reason for a standing clock is looked for again.
+REASON_EVERY = 30.0
+
+
+def still_limited(agent: Agent, project: str, session: str, screen: str,
+                  saw: str) -> bool:
+    """Whether what a clock was set for is still true.
+
+    An agent that keeps a record is asked again: the newest notice must
+    still say it has stopped, and must not say the limit has lifted or that
+    the agent is carrying on by itself. One that keeps no record is asked of
+    the screen - the row that armed the clock has to still be on it. With
+    nothing remembered about why it was armed, the answer is yes: a clock
+    nobody can explain is not one to throw away on a guess.
+    """
+    if agent.notice_path:
+        told, itself = limit_notice(agent, project, session)
+        return bool(told) and not itself
+    return not saw or saw in screen
 
 
 def arms_itself(tm: Tmux) -> bool:
@@ -860,6 +882,13 @@ def cmd_sidebar(args) -> int:
     # an agent three more attempts than it was given.
     tries = int(tm.option(pane, "@sticky_continue_tries") or 0)
     armed_on = ""                      # the notice those attempts were for
+    # What the clock was set for, and when that was last confirmed. A reason
+    # can go away: output scrolls the notice off, a new turn starts, the
+    # agent writes that the limit has lifted - and a clock left standing then
+    # sends a word into a conversation that is already talking.
+    armed_saw = without_animation(
+        tm.option(pane, "@sticky_continue_saw") or "").strip()[:60]
+    reasoned = 0.0
     ours = False                       # whether this turn is the clock's own
     last_pass = 0.0                    # when a full pass last cost tmux calls
     replace = True                     # ... and whether that is due again
@@ -1004,7 +1033,12 @@ def cmd_sidebar(args) -> int:
                 # counting those as output marks a tab finished that never
                 # started. Comparing the text is the only way to tell,
                 # and it is free here: the capture had to be taken anyway.
-                screen = "\n".join(visible)
+                # Less whatever is only animating: see `without_animation`.
+                # Codex draws snow around its prompt box for ever, so a tab
+                # of its own was never once quiet - and everything that keys
+                # off going quiet, the read mark and the clock alike, never
+                # happened there at all.
+                screen = without_animation("\n".join(visible))
                 # A pass that arrives long after the one before it was not
                 # waiting: the machine slept, or this process was stopped.
                 # Said out loud in the log because what follows a wake is
@@ -1147,6 +1181,14 @@ def cmd_sidebar(args) -> int:
                         said, saw = "", ""
                     elif told:
                         said, saw = reset_notice([told])
+                    elif agent.notice_path:
+                        # It keeps a record, and there is nothing in it: then
+                        # nothing has happened. What is on the screen is the
+                        # agent talking, and an agent talking *about* limits
+                        # uses the same words as one that has hit theirs -
+                        # which is how a tab came to set a clock off a
+                        # message explaining this very bug.
+                        said, saw = "", ""
                     else:
                         try:
                             tall = int(tm.fmt(pane, "#{pane_height}") or 0)
@@ -1184,6 +1226,8 @@ def cmd_sidebar(args) -> int:
                         # scrollback that has since been overwritten.
                         tm.ok("set-option", "-p", "-t", pane,
                               "@sticky_continue_saw", saw[:200])
+                        armed_saw = without_animation(saw).strip()[:60]
+                        reasoned = now
                         tm.ok("set-option", "-w", "-t", pane,
                               "@sticky_waiting", "1")
                         tm.ok("set-option", "-p", "-t", pane,
@@ -1230,6 +1274,26 @@ def cmd_sidebar(args) -> int:
                 said_done = False
                 if logging:
                     to_log(logging, pane, size, "mark cleared: you came back")
+
+            # While a clock of sticky's own stands, the reason for it is
+            # looked for again - not every pass, which for a transcript is a
+            # file read, but often enough that a tab does not sit all night
+            # on a notice that went away ten minutes in. A clock you set
+            # yourself with `t` is left alone: you are the reason for that one.
+            if (deadline and saying and not struck
+                    and now - reasoned >= REASON_EVERY):
+                reasoned = now
+                if not still_limited(agent, project, agent_session,
+                                     last_screen or "", armed_saw):
+                    deadline, saying, armed_saw = 0.0, "", ""
+                    tm.ok("set-option", "-p", "-u", "-t", pane,
+                          "@sticky_send_at")
+                    tm.ok("set-option", "-w", "-u", "-t", pane,
+                          "@sticky_waiting")
+                    last_sig = None
+                    if logging:
+                        to_log(logging, pane, size,
+                               "stood down: the limit notice has gone")
 
             # A batch with a time on it. The clock is the sidebar's to
             # watch because it is the only part of sticky that is awake

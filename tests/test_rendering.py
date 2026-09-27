@@ -664,6 +664,34 @@ class TestLightingTheAnnotatedLines:
                 == sticky.MARK_QUOTES)
 
 
+class TestWhatCountsAsOutput:
+    """Codex draws snow around its prompt box, for ever. A tab that animates
+    is never quiet, and "it printed something and then went quiet" is the
+    only definition of finished that holds for every agent - so a tab of
+    Codex's was never marked read, never marked unread, and never set the
+    clock that waits out a limit."""
+
+    def test_a_row_of_spinner_is_not_output(self, sticky):
+        assert not sticky.without_animation("\u2808  \u2801   \u2810").strip()
+
+    def test_the_text_a_spinner_falls_over_is_kept(self, sticky):
+        assert (sticky.without_animation(
+            "\u203a Ask Codex to do anything\u2840  \u2808").strip()
+            == "\u203a Ask Codex to do anything")
+
+    def test_an_agent_saying_what_it_is_doing_still_counts(self, sticky):
+        """Claude's own spinner line carries the seconds and the tokens: that
+        line changing is work happening, which must go on counting."""
+        line = "\u2733 Cerebrating\u2026 (18s \u00b7 \u2193 1.1k tokens)"
+        assert sticky.without_animation(line) == line
+
+    def test_rows_keep_their_numbers(self, sticky):
+        """What reads this decides whether the screen changed; what draws
+        notes works from the rows themselves, so none may go missing."""
+        screen = "one\n\u2808\u2801\nthree"
+        assert len(sticky.without_animation(screen).split("\n")) == 3
+
+
 class TestTypingInTheNotesPane:
     """A letter the sidebar has no use for is not an error to swallow: it
     is the first letter of a sentence, typed with the eye on the notes. It

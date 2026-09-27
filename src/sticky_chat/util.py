@@ -354,6 +354,12 @@ LIMIT_SAID = re.compile(
 CLOCK_SAID = re.compile(r"\b\d{1,2}(?::\d{2})?\s*[ap]\.?m\.?\b"
                         r"|\b\d{1,2}:\d{2}\b", re.I)
 
+# What a warning looks like, as against a stop: a share of the limit used.
+# "You've used 76% of your limit · resets Oct 3 at 4am" says the same words a
+# notice does and means the opposite - the agent is working, and telling you
+# how much is left. A tab armed on one of those sat on a clock for six days.
+SHARE_SAID = re.compile(r"\d+\s*%")
+
 MONTHS = ("jan", "feb", "mar", "apr", "may", "jun",
           "jul", "aug", "sep", "oct", "nov", "dec")
 
@@ -381,6 +387,28 @@ DAY_SAID = re.compile(r"\b(" + "|".join(MONTHS) + r")"
 # phrase `LIMIT_SAID` asks for is what does most of that work now, so this
 # can afford the margin.
 RESET_ROWS = 14
+
+
+# Braille, which is what a terminal spinner is made of - and, in Codex,
+# what falls past its prompt box as snow. Taken out of the screen before one
+# pass is compared with the last, because a tab that animates is never quiet
+# and "it printed something and then went quiet" is the only definition of
+# finished that holds for every agent: without this, an animated tab is never
+# marked read, never marked unread, and never sets the clock that waits out a
+# limit. Braille only, and only where it is all a row has: an agent's own
+# spinner line says `Cerebrating... (18s)` beside it, and that line changing
+# is work happening, which is exactly what must still count.
+ANIMATION = dict.fromkeys(range(0x2800, 0x2900))
+
+
+def without_animation(screen: str) -> str:
+    """The screen with its spinners taken out, for comparing one pass to the next.
+
+    Rows that held nothing else are left blank rather than dropped, so every
+    row keeps the number it had: what reads this decides whether the screen
+    changed, and what draws notes still works from the rows themselves.
+    """
+    return screen.translate(ANIMATION)
 
 
 def reset_notice(rows: list[str],
@@ -414,7 +442,7 @@ def reset_notice(rows: list[str],
     found, dated, saw = "", False, ""
     for row in rows[-RESET_ROWS:]:
         said = LIMIT_SAID.search(row)
-        if not said:
+        if not said or SHARE_SAID.search(row):
             continue
         clock = CLOCK_SAID.search(row, said.end())
         if not clock:

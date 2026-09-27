@@ -1721,6 +1721,47 @@ class TestATabThatSetsItsOwnClock:
         assert (sticky.transcript_slug("/Users/me/Code/arrange_signature")
                 == "-Users-me-Code-arrange-signature")
 
+    def test_a_warning_is_not_a_stop(self, sticky):
+        """"You've used 76% of your limit - resets Oct 3 at 4am" says the
+        same words a notice does and means the opposite: the agent is
+        working, and telling you how much is left. A tab armed on one of
+        those sat on a clock for six days."""
+        warning = ("You've used 76% of your Fable limit \u00b7 resets Oct 3 "
+                   "at 4am (Europe/Berlin)")
+        assert not sticky.reset_notice([warning])[0]
+        assert sticky.reset_notice([self.PLAIN])[0], "and a stop still reads"
+
+    def test_a_standing_clock_is_dropped_when_its_reason_goes(self, sticky,
+                                                             tmp_path):
+        """Output scrolls the notice away, a new turn starts, the limit
+        lifts - and a clock left standing then sends a word into a
+        conversation that is already talking."""
+        home = self.transcript(tmp_path, self.notice(self.PLAIN))
+        args = (sticky.CLAUDE, "/tmp/proj", "abc")
+        # the transcript is what a profile that keeps one is asked
+        import sticky_chat.sidebar as sb
+        keep = sb.limit_notice
+        sb.limit_notice = lambda a, p, s, home=home: sticky.limit_notice(
+            a, p, s, home=home)
+        try:
+            assert sb.still_limited(*args, "", "")
+            home2 = self.transcript(tmp_path / "gone", self.message(self.PROSE))
+            sb.limit_notice = lambda a, p, s: sticky.limit_notice(
+                a, p, s, home=home2)
+            assert not sb.still_limited(*args, "", "")
+        finally:
+            sb.limit_notice = keep
+
+    def test_a_screen_agent_is_asked_of_its_screen(self, sticky):
+        """Codex keeps no record, so the row that armed the clock has to
+        still be on the screen - and a clock nobody can explain is not one
+        to throw away on a guess."""
+        row = "You've hit your usage limit. resets 13:22"
+        assert sticky.still_limited(sticky.CODEX, "/p", "s",
+                                    f"other\n{row}\nmore", row)
+        assert not sticky.still_limited(sticky.CODEX, "/p", "s", "gone", row)
+        assert sticky.still_limited(sticky.CODEX, "/p", "s", "anything", "")
+
     def test_nothing_arms_when_it_is_turned_off(self, sticky):
         for said in ("off", "OFF", "0", "no", "false"):
             assert not sticky.arms_itself(self.FakeTmux(said)), said
