@@ -398,17 +398,28 @@ RESET_ROWS = 14
 # limit. Braille only, and only where it is all a row has: an agent's own
 # spinner line says `Cerebrating... (18s)` beside it, and that line changing
 # is work happening, which is exactly what must still count.
-ANIMATION = dict.fromkeys(range(0x2800, 0x2900))
+ANIMATION = dict.fromkeys(range(0x2800, 0x2900), " ")
+
+RUN_OF_SPACE = re.compile(r"[ \t]+")
 
 
 def without_animation(screen: str) -> str:
     """The screen with its spinners taken out, for comparing one pass to the next.
 
+    Each glyph becomes the space it was drawn over rather than nothing at
+    all: a terminal paints the snow *on* the blanks between words, so taking
+    it away outright runs `> Ask Codex` into `>Ask Codex` and the row reads
+    as changed every time a flake moves. With the spaces given back, runs of
+    them collapse to one and the row settles - which also means an agent
+    re-indenting a line is not news either, and news is the only thing this
+    is asked about.
+
     Rows that held nothing else are left blank rather than dropped, so every
     row keeps the number it had: what reads this decides whether the screen
-    changed, and what draws notes still works from the rows themselves.
+    changed, and what draws notes works from the rows themselves.
     """
-    return screen.translate(ANIMATION)
+    return "\n".join(RUN_OF_SPACE.sub(" ", row.translate(ANIMATION)).rstrip()
+                     for row in screen.split("\n"))
 
 
 def reset_notice(rows: list[str],

@@ -685,6 +685,15 @@ class TestWhatCountsAsOutput:
         line = "\u2733 Cerebrating\u2026 (18s \u00b7 \u2193 1.1k tokens)"
         assert sticky.without_animation(line) == line
 
+    def test_a_flake_gives_back_the_space_it_covered(self, sticky):
+        """A terminal paints the snow *on* the blanks between words. Taking
+        it away outright runs the words together, and the row then reads as
+        changed every time a flake moves - which is the whole bug."""
+        assert (sticky.without_animation("\u203a\u2840Ask Codex")
+                == "\u203a Ask Codex")
+        assert (sticky.without_animation("\u203a Ask\u2840  \u2808 Codex")
+                == "\u203a Ask Codex")
+
     def test_rows_keep_their_numbers(self, sticky):
         """What reads this decides whether the screen changed; what draws
         notes works from the rows themselves, so none may go missing."""
