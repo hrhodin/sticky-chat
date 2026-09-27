@@ -1656,20 +1656,70 @@ class TestATabThatSetsItsOwnClock:
         def run(self, *args):
             return self.said
 
-    NOTICE = "5-hour limit reached \u2219 resets 8pm"
-    PROSE = ("If the agent hits its weekly limit it resets at 8pm, so the "
-             "clock waits until then and sends one word to carry on with")
+    NOTICE = ("Usage limit reached \u00b7 continuing automatically at 4am "
+              "\u00b7 esc or type to cancel")
+    PLAIN = "5-hour limit reached \u00b7 resets 8pm"
+    PROSE = "the usage limit resets at 8pm, so the clock waits until then"
 
-    def test_a_notice_reads_like_one(self, sticky):
-        assert sticky.reads_like_a_notice(self.NOTICE)
-        assert sticky.reset_notice([self.NOTICE])[0], "and it is read"
+    def transcript(self, tmp_path, *records):
+        """A Claude transcript where the agent keeps its own record."""
+        home = tmp_path / "home"
+        where = home / ".claude" / "projects" / "-tmp-proj"
+        where.mkdir(parents=True, exist_ok=True)
+        (where / "abc.jsonl").write_text(
+            "\n".join(json.dumps(r) for r in records) + "\n")
+        return str(home)
 
-    def test_a_sentence_about_limits_does_not(self, sticky):
-        """The words are the same either way - the difference is that a
-        notice is the last thing a tab printed, and it is short."""
-        assert len(self.PROSE) > sticky.NOTICE_WIDTH
-        assert not sticky.reads_like_a_notice(self.PROSE)
-        assert sticky.reset_notice([self.PROSE])[0], "the clock is still read"
+    def notice(self, content):
+        return {"type": "system", "subtype": "informational",
+                "level": "notice", "content": content}
+
+    def message(self, text):
+        return {"type": "assistant",
+                "message": {"content": [{"type": "text", "text": text}]}}
+
+    def test_a_notice_in_the_transcript_is_read(self, sticky, tmp_path):
+        home = self.transcript(tmp_path, self.message(self.PROSE),
+                              self.notice(self.PLAIN))
+        said, itself = sticky.limit_notice(sticky.CLAUDE, "/tmp/proj", "abc",
+                                          home=home)
+        assert said == self.PLAIN and not itself
+        assert sticky.reset_notice([said])[0], "and a time comes out of it"
+
+    def test_prose_about_a_limit_is_not_a_notice(self, sticky, tmp_path):
+        """The words are the same; the record it is kept in is not. This is
+        the distinction no reading of a screen can make, and the one that
+        had a tab typing into a conversation waiting for nothing."""
+        home = self.transcript(tmp_path, self.message(self.PROSE))
+        assert sticky.limit_notice(sticky.CLAUDE, "/tmp/proj", "abc",
+                                   home=home) == ("", False)
+
+    def test_an_agent_that_carries_on_by_itself_says_so(self, sticky, tmp_path):
+        """Claude Code waits and resumes on its own now, so a clock of ours
+        is a second poke at a conversation already coming back."""
+        home = self.transcript(tmp_path, self.notice(self.NOTICE))
+        said, itself = sticky.limit_notice(sticky.CLAUDE, "/tmp/proj", "abc",
+                                           home=home)
+        assert itself and "automatically" in said
+
+    def test_the_newest_notice_is_the_one_that_counts(self, sticky, tmp_path):
+        home = self.transcript(tmp_path, self.notice(self.PLAIN),
+                              self.notice("Usage limit reset \u00b7 continuing "
+                                          "automatically"))
+        said, itself = sticky.limit_notice(sticky.CLAUDE, "/tmp/proj", "abc",
+                                           home=home)
+        assert itself, f"the limit has lifted: {said!r}"
+
+    def test_a_profile_that_keeps_no_transcript_is_not_asked(self, sticky,
+                                                             tmp_path):
+        """Codex prints its notice and writes nothing we can read, so that
+        one is still read off the screen."""
+        assert sticky.limit_notice(sticky.CODEX, "/tmp/proj", "abc",
+                                   home=str(tmp_path)) == ("", False)
+
+    def test_the_path_matches_the_agents_own_naming(self, sticky):
+        assert (sticky.transcript_slug("/Users/me/Code/arrange_signature")
+                == "-Users-me-Code-arrange-signature")
 
     def test_nothing_arms_when_it_is_turned_off(self, sticky):
         for said in ("off", "OFF", "0", "no", "false"):

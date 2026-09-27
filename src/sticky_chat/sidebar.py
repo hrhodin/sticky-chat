@@ -10,7 +10,7 @@ import subprocess
 import sys
 import time
 
-from .agents import CLAUDE, Agent, discover_session
+from .agents import CLAUDE, Agent, discover_session, limit_notice
 from .placement import VIEW_FORMAT, pane_view, parse_view, resolve
 from .store import agent_of, open_store, record_window, resolve_project
 from .tmux import Tmux
@@ -29,7 +29,6 @@ from .util import (
     die,
     log_line,
     read_key,
-    reads_like_a_notice,
     reset_notice,
     self_path,
     terminal_size,
@@ -751,6 +750,10 @@ def cmd_sidebar(args) -> int:
     # sidebar's own pane carries it too, so leaving copy mode here wakes us.
     self_pane = os.environ.get("TMUX_PANE")
     session_id = tm.option(pane, "@sticky_session")
+    # What the *agent* calls this conversation, which is what names its
+    # transcript. The same as ours where we chose it, and discovered later
+    # where the agent chose its own.
+    agent_session = tm.option(pane, "@sticky_agent_session") or session_id
     agent = agent_of(tm, pane)         # whose output this pane is drawing
     # The mark is set when a tab is made, so a tab older than this code has
     # none. Setting it here too means `reload` is enough to bring one up to
@@ -1130,23 +1133,29 @@ def cmd_sidebar(args) -> int:
                 # what makes the difference between a tab worth reading and
                 # one worth waiting on.
                 if not deadline and not struck:
-                    try:
-                        tall = int(tm.fmt(pane, "#{pane_height}") or 0)
-                        said, saw = reset_notice(
-                            tm.capture(pane, -RESET_ROWS, tall - 1,
-                                       joined=True))
-                    except (RuntimeError, ValueError):
+                    # What the agent wrote down beats what is on its screen.
+                    # A transcript keeps a notice as a record of its own,
+                    # where prose that merely mentions a limit is a message -
+                    # a distinction no reading of the screen can make, and
+                    # the one that had a tab typing `continue` at a
+                    # conversation that was waiting for nothing. Where the
+                    # notice says the agent will carry on by itself, which
+                    # Claude Code now does, there is nothing for a clock of
+                    # ours to do but poke a conversation already coming back.
+                    told, itself = limit_notice(agent, project, agent_session)
+                    if itself:
                         said, saw = "", ""
-                    # Only ever from a line that reads like a notice. The
-                    # words this is looked for by - "limit reached", "usage
-                    # limit", and a clock after them - are words an agent
-                    # also writes *about* limits, in a paragraph, and arming
-                    # on one of those types a word into a tab that was
-                    # waiting for nothing. A notice is short and ends in its
-                    # clock; a sentence about one runs on. See NOTICE_WIDTH.
-                    if saw and not reads_like_a_notice(saw):
-                        said = ""
-                    # And nothing at all where it has been turned off: some
+                    elif told:
+                        said, saw = reset_notice([told])
+                    else:
+                        try:
+                            tall = int(tm.fmt(pane, "#{pane_height}") or 0)
+                            said, saw = reset_notice(
+                                tm.capture(pane, -RESET_ROWS, tall - 1,
+                                           joined=True))
+                        except (RuntimeError, ValueError):
+                            said, saw = "", ""
+                    # Nothing at all where it has been turned off: some
                     # people would rather come back to a tab that stopped
                     # than to one that carried on without them.
                     if said and not arms_itself(tm):
@@ -1260,6 +1269,7 @@ def cmd_sidebar(args) -> int:
                     record_window(session_id, agent_session=found)
                     tm.ok("set-option", "-p", "-t", pane,
                           "@sticky_agent_session", found)
+                    agent_session = found
                 hunting = (not found
                            and time.time() - launched < DISCOVER_WINDOW)
                 look_again = now + DISCOVER_EVERY

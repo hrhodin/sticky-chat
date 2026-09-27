@@ -36,7 +36,7 @@ import sqlite3
 from dataclasses import dataclass
 
 from .tmux import SESSION_NAME
-from .util import die
+from .util import LIMIT_SAID, die
 
 # ----------------------------------------------------------------- defaults
 
@@ -136,6 +136,13 @@ class Agent:
     # profile spells the words and `conversation_in_db` writes the one
     # sentence they go into; a profile missing any of the four is never
     # asked, exactly as one with no database at all.
+    # Where the agent writes down what it told you, if it writes it
+    # anywhere a machine can read: a path under $HOME with `{slug}` - the
+    # project, its separators turned to dashes - and `{session}` in it. A
+    # notice read from there is the agent's own words in its own record,
+    # not prose scraped off a screen that might only be talking *about*
+    # limits. See `limit_notice`.
+    notice_path: str = ""
     state_db_glob: str = ""
     state_db_table: str = ""
     state_db_id_column: str = ""
@@ -230,6 +237,10 @@ CLAUDE = Agent(
     env=(("CLAUDE_CODE_TMUX_SESSION", SESSION_NAME),
          ("CLAUDE_CODE_TMUX_PREFIX", PREFIX)),
     session_flag="--session-id",
+    # The transcript is not globbed for - we name the conversation, so the
+    # path is known - but it is read for one thing: what Claude said when
+    # it ran out of turns, and whether it means to carry on by itself.
+    notice_path=".claude/projects/{slug}/{session}.jsonl",
     resume_flags=("--resume", "-r"),
     continue_flags=("--continue", "-c"),
     fork_flags=("--continue", "--fork-session"),
@@ -651,6 +662,74 @@ def conversation_in_db(agent: Agent, path: str, project: str,
         if ident and (not when or when >= since):
             return str(ident)
     return ""
+
+
+# How much of the end of a transcript is worth reading to find the last
+# thing an agent announced. A record is a line and the lines are long; a
+# quarter of a megabyte is dozens of them and one read.
+NOTICE_TAIL = 262144
+
+
+def transcript_slug(project: str) -> str:
+    """A project path as the agent's own directory names spell it.
+
+    Every character that is not a letter or a digit becomes a dash, which
+    is what turns `/Users/me/Code/arrange_signature` into
+    `-Users-me-Code-arrange-signature` - the underscore goes the same way
+    as the slashes.
+    """
+    return re.sub(r"[^A-Za-z0-9]", "-", os.path.abspath(project))
+
+
+def limit_notice(agent: Agent, project: str, session: str,
+                 home: str = "") -> tuple[str, bool]:
+    """What the agent last announced about its limit, and who will act on it.
+
+    The words that say "I have run out of turns until four" are the same
+    words an agent uses when it merely *writes about* running out, and no
+    reading of a screen can tell those apart - which is how a tab came to
+    type `continue` into a conversation that was waiting for nothing. An
+    agent that keeps a transcript has already made the distinction for us:
+    the notice is a record of its own, with a level and a kind, and prose
+    is a message. So where there is a transcript to read, it is read.
+
+    The second half of the answer matters as much as the first. Claude Code
+    now says `continuing automatically at 4am` and does exactly that, so a
+    clock of ours on top of it is a second poke at a conversation already
+    coming back - and the newest notice may equally be `Usage limit reset`,
+    which means there is nothing to wait for at all.
+
+    Comes back as the notice's own words and whether the agent means to
+    carry on by itself. Two empties where there is nothing to read: no
+    transcript for this profile, no file yet, or no notice in the tail of
+    it - and the caller falls back to the screen.
+    """
+    if not (agent.notice_path and session and project):
+        return "", False
+    path = os.path.join(home or os.path.expanduser("~"),
+                        agent.notice_path.format(slug=transcript_slug(project),
+                                                 session=session))
+    try:
+        with open(path, "rb") as fh:
+            fh.seek(0, os.SEEK_END)
+            fh.seek(max(0, fh.tell() - NOTICE_TAIL))
+            tail = fh.read().decode("utf-8", "replace")
+    except OSError:
+        return "", False
+    for line in reversed(tail.splitlines()):
+        if '"notice"' not in line or '"system"' not in line:
+            continue
+        try:
+            rec = json.loads(line)
+        except ValueError:
+            continue                    # the first line of a tail is a half
+        if rec.get("type") != "system" or rec.get("level") != "notice":
+            continue
+        said = str(rec.get("content") or "")
+        if not LIMIT_SAID.search(said):
+            continue
+        return said, "automatic" in said.lower()
+    return "", False
 
 
 def discover_session(agent: Agent, since: float, home: str = "",

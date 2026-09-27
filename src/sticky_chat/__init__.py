@@ -45,8 +45,10 @@ from .agents import (
     conversation_in_db,
     discover_session,
     known_name,
+    limit_notice,
     require_agent,
     session_id_of,
+    transcript_slug,
     unix_time,
 )
 from .cli import GLOBAL_FLAGS, OUR_FLAGS, build_parser, main, split_our_flags
@@ -225,7 +227,6 @@ from .util import (
     COL_FUZZY,
     COL_PENDING,
     DIM,
-    NOTICE_WIDTH,
     RESET,
     RESET_ROWS,
     REVERSE,
@@ -239,7 +240,6 @@ from .util import (
     log_line,
     prompt_line,
     read_key,
-    reads_like_a_notice,
     reset_notice,
     reset_time,
     row_step,

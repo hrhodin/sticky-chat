@@ -138,11 +138,18 @@ hour in the footer beneath it. Click that row to call it off - it stays
 there struck out, so you can see what it was going to do and click again to
 put it back - or `t` then `cancel` to be rid of it.
 
-What it arms on is a line that says a limit and gives a clock, and only a
-short one: those same words turn up in a paragraph an agent writes *about*
-limits, and a tab that armed on one of those would type into a tab that was
-waiting for nothing. A notice is the last thing a tab prints before it goes
-quiet, and it is short; a sentence about one runs on. To have none of it:
+Where the agent keeps a transcript, that is what is read rather than the
+screen. A notice is a record of its own in there - Claude Code writes
+`{"type":"system","level":"notice","content":"Usage limit reached ..."}` -
+while a paragraph *about* limits is a message, and no reading of a screen
+can tell those two apart: the words are the same, which is how a tab came
+to type `continue` at a conversation that was waiting for nothing. Claude
+Code also now says `continuing automatically at 4am` and does exactly that,
+so where the notice says the agent will carry on by itself, sticky stands
+down rather than poking a conversation that is already coming back. An
+agent that writes nothing readable - Codex prints its notice and keeps no
+transcript we can find - is still read off the screen, by the words and a
+clock after them. To have none of it:
 
 ```sh
 # ~/.sticky/user.conf
