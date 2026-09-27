@@ -269,6 +269,7 @@ tmux keeps whatever prefix you configured.
 | `C-g z` `C-g d` | zoom the pane, detach (stop looking; nothing stops) |
 | `C-g Q` | quit: close every window and stop the agent sessions |
 | `C-g [` | scroll back through the output |
+| `alt`-drag | mark while the agent has the mouse — see below |
 
 Over the chat pane, drag with the mouse to note a selection, or press `N`
 in copy mode. **Selecting copies**, in either pane and whether or not the
@@ -276,6 +277,17 @@ selection becomes a note, the way it does in an X11 terminal. `y` in copy
 mode copies the live selection again, wherever you are, and leaves it
 highlighted, and Ctrl-C in the note prompt copies and closes without
 saving anything.
+
+An agent can take the mouse for itself. Claude Code draws its multi-agent
+view — the one with `\u2190 for agents` in the footer and things you click —
+on the alternate screen, and asks tmux for every mouse event so that those
+things *are* clickable. A plain drag over that pane is then the agent's, and
+never becomes a selection: marking looks broken. Two ways through. **Hold
+alt** and the drag is tmux's again, selection and note and all. Or press
+`C-g [` first: in copy mode tmux owns the mouse whatever the agent wanted,
+and dragging works as it always did. Leaving that view — it is a mode of the
+agent's, not a setting of sticky's — puts the pane back on the normal screen
+and hands the mouse back.
 
 Scrolled back, the lines you have already annotated are lit. Copy mode is
 the one place tmux will paint over a pane's own output — it colours the

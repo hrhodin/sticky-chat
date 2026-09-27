@@ -268,6 +268,16 @@ set-hook -g client-attached 'run-shell -b "@BIN@ fit --socket \\"#{socket_path}\
 # clicking it again crosses back. `{next}` wraps in a two-pane window,
 # which is what makes it a toggle rather than a one-way trip - and a target
 # cannot be a format, so the partner cannot simply be named.
+# Marking when the agent has taken the mouse. Claude Code draws its
+# multi-agent view on the alternate screen and asks tmux for every mouse
+# event to make it clickable, so a plain drag over that pane is the agent's
+# and never becomes a selection - which reads as "I cannot mark things any
+# more". Alt held down says the drag is for tmux: it starts a selection at
+# the mouse, and from there the copy-mode bindings turn it into a note like
+# any other. `move-pane -M`, which is what Alt-drag does by default, is left
+# to every other pane; the agent's is where the clash is.
+bind -T root M-MouseDrag1Pane if -F '#{==:#{@sticky_role},claude}' 'copy-mode -M' 'move-pane -M'
+
 bind -T root MouseDown1StatusLeft select-pane -t "{next}"
 
 # Clicking the status line. Rebound only to say what tmux made of the

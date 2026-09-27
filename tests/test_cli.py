@@ -266,6 +266,16 @@ class TestGeneratedConfig:
         sticky.private_dir(str(home))
         assert oct(home.stat().st_mode)[-3:] == "700"
 
+    def test_alt_drag_marks_when_the_agent_has_the_mouse(self, config):
+        """Claude Code's multi-agent view asks tmux for every mouse event, so
+        a plain drag over that pane is the agent's. Alt says otherwise - and
+        only over the agent's pane, since alt-drag moves a pane everywhere
+        else."""
+        line = next(ln for ln in config
+                    if ln.startswith("bind -T root M-MouseDrag1Pane"))
+        assert "@sticky_role},claude" in line
+        assert "copy-mode -M" in line and "move-pane -M" in line
+
     def test_your_own_overrides_are_sourced_last(self, config):
         assert any(line.startswith("source-file -q") for line in config)
 
