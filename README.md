@@ -348,6 +348,14 @@ changed enough that the position shown is a guess.
 Above that, over a rule, is a dense list of the notes *above* what you can
 see — whatever has scrolled off the top, nearest one at the bottom. It says `↑ N more` on its top row
 when the list is truncated.
+
+A note whose row belongs to a pane that has gone — anything taken before a
+resume — cannot be compared with this screen at all, so it is ordered by
+*when it was taken* instead, oldest first, above everything that does have a
+row here. An agent appends, so that order is the same order: a note taken
+later is further down. The notes that do have rows here say where the screen
+sits in it, and one taken after the last of those falls under the map rather
+than over it.
 Below the map, over a rule of its own, is the same list for the notes
 *below* what you can see — the ones the pane has not reached yet, nearest
 one at the top.

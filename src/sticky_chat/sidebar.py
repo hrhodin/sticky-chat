@@ -403,7 +403,8 @@ def history_order(placed: list[dict]) -> list[dict]:
     here, in the order they were written.
     """
     return sorted(placed, key=lambda p: (1, p["note"].get("abs_line", 0))
-                  if p.get("here", True) else (0, 0))
+                  if p.get("here", True)
+                  else (0, p["note"].get("created", "")))
 
 
 def band_window(placed: list[dict], band_h: int, scroll: int,

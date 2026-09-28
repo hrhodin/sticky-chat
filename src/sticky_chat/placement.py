@@ -345,12 +345,27 @@ def resolve(visible: list[str], top_abs: int, height: int,
             chosen[id(note)] = cand
             break
 
+    # Where a note goes when its row means nothing here - taken before a
+    # resume, or in a pane that has gone. Its position cannot be compared
+    # with anything on this screen, but *when it was taken* can be: an agent
+    # appends, so a note taken later is further down. What gives that a
+    # place to be measured from is the notes whose rows do count here: the
+    # newest of the ones at or above the foot of the screen is the last
+    # moment known to be behind you, and a note taken after it is ahead.
+    # With none of those there is nothing to measure against and they all go
+    # above, as they always did - which is the whole of what this replaces.
+    latest = max((note.get("created", "") for note in notes
+                  if positioned(note)
+                  and note.get("abs_line", top_abs) < bottom_abs),
+                 default="")
+
     out = []
     for note in notes:
         cand = chosen.get(id(note))
         if cand is None:
-            below = (positioned(note)
-                     and note.get("abs_line", top_abs) >= bottom_abs)
+            below = (note.get("abs_line", top_abs) >= bottom_abs
+                     if positioned(note) else
+                     bool(latest) and note.get("created", "") > latest)
             result = {"row": None, "match": "offscreen",
                       "where": "below" if below else "above"}
         else:

@@ -131,6 +131,34 @@ def test_an_exact_match_is_found_however_old_the_note_is(sticky):
     assert taken["pane"] == PANE, "and it is pinned here from now on"
 
 
+def test_a_note_with_no_row_here_is_placed_by_when_it_was_taken(sticky):
+    """After a resume a note's row belongs to a pane that has gone, so it
+    cannot be compared with this screen. When it was taken can be: an agent
+    appends, so a note taken after the last moment known to be behind you is
+    ahead of you, and belongs under the map rather than over it.
+    """
+    here = note(id="here", abs_line=5, created="2026-09-20T10:00:00")
+    older = note(id="older", quote="not on this screen", rows=["not here"],
+                 pane="%gone", created="2026-09-20T09:00:00")
+    newer = note(id="newer", quote="not on this screen either",
+                 rows=["nor here"], pane="%gone",
+                 created="2026-09-20T11:00:00")
+    out = {p["id"]: p for p in
+           sticky.resolve(VISIBLE, 0, len(VISIBLE), [here, older, newer], PANE)}
+    assert out["here"]["row"] == 5, "the one with a row here still has it"
+    assert out["older"]["where"] == "above"
+    assert out["newer"]["where"] == "below"
+
+
+def test_with_nothing_to_measure_against_they_all_go_above(sticky):
+    """No note of this pane's on screen is no divider, and a guess about
+    which side of you something falls is worse than the old answer."""
+    gone = [note(id=f"g{n}", quote="nowhere", rows=["nowhere"], pane="%gone",
+                 created=f"2026-09-2{n}T10:00:00") for n in range(3)]
+    out = sticky.resolve(VISIBLE, 0, len(VISIBLE), gone, PANE)
+    assert {p["where"] for p in out} == {"above"}
+
+
 def test_a_note_that_shares_no_long_word_is_never_compared(sticky):
     """The saving, rather than the answer - which is the same either way.
 
