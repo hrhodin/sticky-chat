@@ -399,12 +399,33 @@ def history_order(placed: list[dict]) -> list[dict]:
     pane they were counted in had been running all day - so sorted in with
     the rest they crowd out everything taken since, and the band, which
     shows the newest end of this list, showed yesterday instead of the note
-    just taken. Unplaced elsewhere, they go above everything that is placed
-    here, in the order they were written.
+    just taken.
+
+    So they go above everything placed here, and among themselves by the
+    pane they were taken in and then by their row in it. Within one pane
+    that row is exact, which matters because when a note was taken is only
+    nearly the same as where it sits: going back to annotate something
+    further up makes a later note that belongs earlier, and its row says so
+    while its clock does not. Across panes there is nothing to compare but
+    the clock, so the panes themselves are ordered by when each began.
     """
-    return sorted(placed, key=lambda p: (1, p["note"].get("abs_line", 0))
-                  if p.get("here", True)
-                  else (0, p["note"].get("created", "")))
+    began: dict[str, str] = {}
+    for item in placed:
+        if item.get("here", True):
+            continue
+        note = item["note"]
+        pane, when = note.get("pane", ""), note.get("created", "")
+        if when and when < began.get(pane, "\uffff"):
+            began[pane] = when
+
+    def where(item: dict) -> tuple:
+        note = item["note"]
+        if item.get("here", True):
+            return (1, "", note.get("abs_line", 0))
+        return (0, began.get(note.get("pane", ""), ""),
+                note.get("abs_line", 0))
+
+    return sorted(placed, key=where)
 
 
 def band_window(placed: list[dict], band_h: int, scroll: int,

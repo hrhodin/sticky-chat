@@ -387,6 +387,32 @@ class TestNotesFromAPaneThatHasGone:
         assert listed, lines
         assert "just now 1" in listed[-1], listed
 
+    def test_within_one_pane_the_row_wins_over_the_clock(self, sticky):
+        """When a note was taken is only nearly where it sits: going back to
+        annotate something further up makes a later note that belongs
+        earlier. Its row in that pane says so, and that row is exact even
+        though the pane has gone."""
+        def gone(ident, created, abs_line):
+            return placed(None, ident, ident, match="offscreen", where="above",
+                          here=False, note={"pane": "%gone",
+                                            "created": created,
+                                            "abs_line": abs_line})
+        rows = [gone("late-but-higher", "2026-09-20T18:00", 300),
+                gone("early-but-lower", "2026-09-20T09:00", 900)]
+        assert [item["id"] for item in sticky.history_order(rows)] == [
+            "late-but-higher", "early-but-lower"]
+
+    def test_the_panes_themselves_are_ordered_by_when_they_began(self, sticky):
+        """Across panes there is nothing to compare but the clock."""
+        def gone(ident, pane, created, abs_line):
+            return placed(None, ident, ident, match="offscreen", where="above",
+                          here=False, note={"pane": pane, "created": created,
+                                            "abs_line": abs_line})
+        rows = [gone("newer pane", "%b", "2026-09-21T09:00", 5),
+                gone("older pane", "%a", "2026-09-19T09:00", 900)]
+        assert [item["id"] for item in sticky.history_order(rows)] == [
+            "older pane", "newer pane"]
+
     def test_they_sort_above_everything_taken_here(self, sticky):
         order = [item["id"] for item in sticky.history_order(self.rows())]
         assert order[-2:] == ["here0", "here1"]

@@ -350,12 +350,18 @@ see — whatever has scrolled off the top, nearest one at the bottom. It says `�
 when the list is truncated.
 
 A note whose row belongs to a pane that has gone — anything taken before a
-resume — cannot be compared with this screen at all, so it is ordered by
-*when it was taken* instead, oldest first, above everything that does have a
-row here. An agent appends, so that order is the same order: a note taken
-later is further down. The notes that do have rows here say where the screen
-sits in it, and one taken after the last of those falls under the map rather
-than over it.
+resume — cannot be compared with this screen at all, so those are listed
+above everything that does have a row here, ordered by the pane they were
+taken in and then by their row in it. Within one pane that row is still
+exact, which matters because going back to annotate something further up
+makes a later note that belongs earlier. Across panes there is nothing to
+compare but the clock, so the panes go in the order they began.
+
+Which side of you such a note falls is the one thing left to guess at, and
+it is guessed by time: an agent appends, so a note taken after the last
+moment known to be behind you is probably ahead of you, and goes under the
+map rather than over it. Probably, not certainly — that is the one place
+where going back to annotate upwards can put a note on the wrong side.
 Below the map, over a rule of its own, is the same list for the notes
 *below* what you can see — the ones the pane has not reached yet, nearest
 one at the top.
