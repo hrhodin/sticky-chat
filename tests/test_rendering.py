@@ -279,6 +279,49 @@ class TestTheBand:
         assert "↑12 above" in self.band(sticky)[-1]
 
 
+class TestEveryNoteIsReachable:
+    """A note that cannot be put on a row belongs in the band, and the band
+    scrolls back through all of them - so there is no such thing as a note
+    the sidebar will not show you. There was: the band's window was sliced
+    by *counting* the listed notes off the front of an order, which assumes
+    every listed note sorts before every aligned one. On an alternate screen
+    it does not. The pane has no scrollback there, so what is placed on it
+    is numbered from nearly zero while the notes above it still carry the
+    numbers the normal buffer gave them, and one sorted past the count was
+    in no window at any scroll position.
+    """
+
+    def rows(self):
+        # what an alternate screen looks like: one note placed low, and the
+        # rest above it carrying numbers from the buffer that has gone
+        drawn = placed(2, "here", "on a row", note={"abs_line": 2})
+        older = [placed(None, f"old{n}", f"older {n}", match="offscreen",
+                        where="above", note={"abs_line": 9000 + n})
+                 for n in range(20)]
+        return [drawn, *older]
+
+    def reachable(self, sticky, rows, height=20):
+        seen = set()
+        for scroll in range(len(rows) + 3):
+            hits = []
+            sticky.build_frame(rows, 34, height, scroll, hits)
+            seen |= {hit["id"] for hit in hits}
+        return seen
+
+    def test_a_note_numbered_past_the_placed_one_is_still_listed(self, sticky):
+        rows = self.rows()
+        seen = self.reachable(sticky, rows)
+        assert {item["id"] for item in rows} <= seen, (
+            f"unreachable: {[r['id'] for r in rows if r['id'] not in seen]}")
+
+    def test_the_band_still_ends_at_what_is_above_the_view(self, sticky):
+        """The newest end of the band is what just scrolled off, not the
+        oldest note in the store: scrolling is how you reach back."""
+        lines = [plain(line) for line in sticky.build_frame(self.rows(), 34, 20)]
+        joined = "\n".join(lines)
+        assert "older 19" in joined, joined
+
+
 class TestTheBandBelow:
     """Notes whose text is past the bottom edge get a band of their own."""
 

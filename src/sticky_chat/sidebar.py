@@ -431,9 +431,22 @@ def band_window(placed: list[dict], band_h: int, scroll: int,
             aligned.append(item)
 
     history = history_order(placed)
+    # Where the band ends: after the last note that belongs in it, found in
+    # the order rather than counted off the front of it. Counting assumed
+    # every listed note sorts before every aligned one, which is true only
+    # while their rows are counted from the same place - and they are not on
+    # an alternate screen, where the pane has no scrollback and everything
+    # placed on it is numbered from nearly zero while the notes above it
+    # still carry the numbers the normal buffer gave them. A note past the
+    # count was then in no window at any scroll position: not on a row, not
+    # in the band, reachable nowhere.
+    #
     # With nothing above the view there is nothing to preview: the band only
     # earns its rows once you scroll it back through the whole history.
-    anchor = len(listed) or (len(history) if scroll else 0)
+    seats = {item["id"] for item in listed}
+    last = max((at for at, item in enumerate(history) if item["id"] in seats),
+               default=-1)
+    anchor = (last + 1) or (len(history) if scroll else 0)
     # The rule always costs a row; the "N more" line costs another, but only
     # when there is something for it to say. Reserving it either way would
     # put the oldest note permanently out of the cursor's reach.
