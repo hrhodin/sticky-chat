@@ -277,6 +277,19 @@ class TestGeneratedConfig:
         assert "mouse_any_flag" not in agent, "the agent's wishes do not count"
         assert "mouse_any_flag" in rest, "everywhere else keeps tmux's rule"
 
+    def test_the_wheel_goes_back_to_a_pane_drawing_its_own_screen(self, config):
+        """There is no scrollback on an alternate screen, so scrolling in
+        copy mode over one moves nothing while the agent's own view - the
+        thing being scrolled at - never hears the wheel."""
+        wheels = [ln for ln in config
+                  if ln.startswith(("bind -T copy-mode Wheel",
+                                    "bind -T copy-mode-vi Wheel"))]
+        assert len(wheels) == 4, wheels
+        for line in wheels:
+            assert "alternate_on" in line and "mouse_any_flag" in line
+            assert "cancel" in line and "send-keys -M" in line, line
+            assert "scroll-up" in line or "scroll-down" in line, line
+
     def test_no_gesture_pulls_a_third_pane_into_a_sticky_window(self, config):
         """A sticky window is an agent and its sidebar, and there is nowhere
         in that for a third pane to go. tmux's ctrl-drag makes one where you

@@ -296,11 +296,14 @@ columns wide and impossible to account for. In any other pane both gestures
 are tmux's own, untouched.
 
 It is a mode of the agent's rather than a setting of sticky's, so it goes
-when you leave that view. Two things do behave differently while it is up,
-both the agent's doing: the wheel scrolls what the agent draws instead of
-entering copy mode, and the alternate screen has no scrollback, so notes
-above what is on screen stay in the band until the pane comes back to the
-normal buffer — the footer's `↑ N above` is counting them.
+when you leave that view. Two things behave differently while it is up, both
+the agent's doing. The wheel scrolls what the agent draws rather than
+entering copy mode — and if you were already in copy mode when the agent
+took the screen, the wheel leaves the mode and goes back to it, since an
+alternate screen has no scrollback to scroll and the view you were reaching
+for is the agent's. And notes above what is on screen stay in the band until
+the pane comes back to the normal buffer; the footer's `↑ N above` is
+counting them.
 
 Scrolled back, the lines you have already annotated are lit. Copy mode is
 the one place tmux will paint over a pane's own output — it colours the

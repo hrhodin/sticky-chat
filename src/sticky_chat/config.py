@@ -316,6 +316,16 @@ bind -T root MouseUp1Pane if -F '#{==:#{@sticky_role},sidebar}' 'run-shell -b "@
 bind -T root DoubleClick1Pane if -F '#{==:#{@sticky_role},sidebar}' 'run-shell -b "@BIN@ click --edit --socket \\"#{socket_path}\\" --client \\"#{client_name}\\" --pane \\"#{pane_id}\\" --y \\"#{mouse_y}\\" --x \\"#{mouse_x}\\""'
 
 bind -T root WheelUpPane if -F '#{==:#{@sticky_role},sidebar}' 'send-keys -t "#{pane_id}" C-y' 'if -F "#{||:#{alternate_on},#{pane_in_mode},#{mouse_any_flag}}" "send-keys -M" "copy-mode -e"'
+
+# And once you are in copy mode over a pane that draws its own screen, the
+# wheel has to go back to it. There is no scrollback on an alternate screen,
+# so scrolling in copy mode there moves nothing while the agent's own view -
+# the thing you were trying to scroll - never hears the wheel at all. Leaving
+# the mode first is what makes the wheel mean what it meant.
+bind -T copy-mode WheelUpPane if -F '#{||:#{alternate_on},#{mouse_any_flag}}' { send -X cancel ; send-keys -M } { select-pane ; send -X -N 5 scroll-up }
+bind -T copy-mode WheelDownPane if -F '#{||:#{alternate_on},#{mouse_any_flag}}' { send -X cancel ; send-keys -M } { select-pane ; send -X -N 5 scroll-down }
+bind -T copy-mode-vi WheelUpPane if -F '#{||:#{alternate_on},#{mouse_any_flag}}' { send -X cancel ; send-keys -M } { select-pane ; send -X -N 5 scroll-up }
+bind -T copy-mode-vi WheelDownPane if -F '#{||:#{alternate_on},#{mouse_any_flag}}' { send -X cancel ; send-keys -M } { select-pane ; send -X -N 5 scroll-down }
 bind -T root WheelDownPane if -F '#{==:#{@sticky_role},sidebar}' 'send-keys -t "#{pane_id}" C-e' 'send-keys -M'
 
 # entering or leaving copy mode is exactly when the view stops moving: wake the
