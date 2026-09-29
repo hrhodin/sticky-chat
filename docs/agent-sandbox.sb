@@ -1,0 +1,43 @@
+;; A sandbox for an agent run inside sticky-chat: it may read, and it may
+;; write only where you say. macOS calls this Seatbelt and runs it with
+;; `sandbox-exec`, which is deprecated and has outlived several
+;; announcements of its death; nothing else on macOS fences a process this
+;; cheaply, and sticky does not depend on it.
+;;
+;;   sticky-chat start ~/Code/thing --agent-cmd "sandbox-exec \
+;;     -f ~/.sticky/agent.sb \
+;;     -D PROJECT=$HOME/Code/thing \
+;;     -D HOME_CLAUDE=$HOME/.claude -D HOME_STICKY=$HOME/.sticky \
+;;     -D SSH=$HOME/.ssh -D GNUPG=$HOME/.gnupg -D NETRC=$HOME/.netrc \
+;;     claude"
+;;
+;; Every -D is a path this file names. They are given rather than written in
+;; so that one file serves every project.
+
+(version 1)
+
+;; Reading is left alone. What a coding agent is for is reading your code,
+;; and a profile that fences reads fences the compiler, the language server
+;; and half of /usr with it. The worst case this is aimed at is a file
+;; changed or deleted, which is a write.
+(allow default)
+
+(deny file-write*)
+
+(allow file-write*
+  ;; the work itself
+  (subpath (param "PROJECT"))
+  ;; the agent's own transcripts and settings, and sticky's notes
+  (subpath (param "HOME_CLAUDE"))
+  (subpath (param "HOME_STICKY"))
+  ;; scratch space, and the tty it is talking to you through
+  (subpath "/private/tmp")
+  (subpath "/private/var/folders")
+  (subpath "/dev"))
+
+;; Keys and credentials are not even readable: an agent that cannot write
+;; anywhere can still read a private key out to somebody who asked nicely.
+(deny file-read*
+  (subpath (param "SSH"))
+  (subpath (param "GNUPG"))
+  (literal (param "NETRC")))

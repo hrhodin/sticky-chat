@@ -1465,6 +1465,23 @@ class TestAnotherAgent:
         assert back[0][3] == "generic"
         assert back[0][4] == command
 
+    def test_an_agent_command_may_put_something_in_front(
+            self, tmux, run_sticky, project, close_windows, sticky_home):
+        """`--agent-cmd` is how a sandbox, a container or `env` goes in
+        front of the agent. Quoted as one word it became a filename with
+        spaces in it, which could never be run."""
+        pane = run_sticky("start", project, "--detach", "--agent", "generic",
+                          "--agent-cmd",
+                          f"/usr/bin/env STICKY_PROBE=1 "
+                          f"{fake_claude(project)}").strip()
+        close_windows.append(pane)
+        time.sleep(1.0)
+        line = tmux("display-message", "-p", "-t", pane,
+                    "#{@sticky_agent_cmd}").strip()
+        assert line.startswith("/usr/bin/env STICKY_PROBE=1"), line
+        assert tmux("display-message", "-p", "-t", pane,
+                    "#{pane_dead}").strip() != "1", "and it is still running"
+
     def test_claude_is_still_what_a_tab_gets_by_default(
             self, tmux, run_sticky, project, close_windows, sticky_home):
         pane = run_sticky("start", project, "--detach",

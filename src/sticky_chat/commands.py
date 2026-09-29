@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import signal
 import subprocess
 import sys
@@ -2083,7 +2084,16 @@ def cmd_start(args) -> int:
         if not program:
             die(f"the {agent.name} profile has no command of its own; say "
                 f"what to run with --agent-cmd")
-        base = [program]
+        # A command line, not a program name: `--agent-cmd` is how you put
+        # something in front of the agent - a sandbox, a container, `env`,
+        # `nice` - and quoting the whole string as one word made a filename
+        # with spaces in it that could never be run. Split as a shell would,
+        # then quoted word by word below, so a path with a space in it still
+        # works when you quote it yourself.
+        try:
+            base = shlex.split(program) or [program]
+        except ValueError:
+            base = [program]            # unbalanced quotes: take it as given
         if not args.agent_cmd and not args.menus:
             # The agent answers in prose instead of opening a question menu,
             # which a sidebar full of notes has no way to answer.

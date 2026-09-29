@@ -531,6 +531,42 @@ for a year, `resume --all` offers once to forget them. Should a
 conversation itself be gone, the tab still opens on the same project with a
 fresh one, and says so.
 
+## Keeping the agent inside a fence
+
+An agent run with `--dangerously-skip-permissions` can do anything you can:
+read every file you own, change them, delete them. Three fences, from the
+cheapest to the strongest, and all three leave sticky working — it reads the
+*terminal*, not the agent, so a fenced agent still gets its notes taken.
+
+**The agent's own permissions.** `--permission-mode` and `--allowedTools` /
+`--disallowedTools` on the command line, or `permissions.allow` and
+`permissions.deny` in `~/.claude/settings.json`, which takes patterns like
+`Read(./secrets/**)` and `Bash(rm:*)`. Cheapest, and the agent is policing
+itself: a tool it does not go through is not covered.
+
+**A macOS sandbox.** `docs/agent-sandbox.sb` is a Seatbelt profile that lets
+the agent read what it likes and write only in the project, its own
+transcript directory and the scratch directories a terminal program needs -
+with `~/.ssh`, `~/.gnupg` and `~/.netrc` not even readable. The kernel
+enforces it, so it holds whatever the agent decides to do:
+
+```sh
+sticky-chat start ~/Code/thing --agent-cmd "sandbox-exec \
+  -f ~/.sticky/agent.sb -D PROJECT=$HOME/Code/thing \
+  -D HOME_CLAUDE=$HOME/.claude -D HOME_STICKY=$HOME/.sticky \
+  -D SSH=$HOME/.ssh -D GNUPG=$HOME/.gnupg -D NETRC=$HOME/.netrc claude"
+```
+
+`--agent-cmd` takes a command line, so anything that ends by running the
+agent goes in front of it: `sandbox-exec`, `env`, `nice`, `docker run`.
+
+**A container.** Strongest, and the one that also fences the network: run
+the agent in a container with only the project mounted, and give the tab
+`--agent-cmd "docker run --rm -it -v $PWD:/work ..."`. What it costs is the
+agent's transcript, which then lives in the container - sticky reads that
+file to know when a limit has been hit, so mount `~/.claude` too if you want
+the clock to keep working.
+
 ## What survives what
 
 | event | tmux session | the agent's conversation | your notes |
