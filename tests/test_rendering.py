@@ -402,6 +402,23 @@ class TestNotesFromAPaneThatHasGone:
         assert [item["id"] for item in sticky.history_order(rows)] == [
             "late-but-higher", "early-but-lower"]
 
+    def test_a_note_with_no_pane_recorded_goes_by_its_clock(self, sticky):
+        """Notes older than the day sticky began writing down which pane it
+        measured them in - 149 of them in this author's own stores. The row
+        they carry belongs to a pane nobody can name, so sorting by it
+        shuffles panes together; when they were taken is all they have, and
+        it is enough."""
+        def item(ident, pane, created, abs_line):
+            return placed(None, ident, ident, match="offscreen", where="above",
+                          here=False, note={"pane": pane, "created": created,
+                                            "abs_line": abs_line})
+        rows = [item("nameless late", "", "2026-09-20T18:00", 9999),
+                item("nameless early", "", "2026-09-19T08:00", 12),
+                item("named lower", "%a", "2026-09-19T12:00", 900),
+                item("named upper", "%a", "2026-09-19T18:00", 300)]
+        assert [p["id"] for p in sticky.history_order(rows)] == [
+            "nameless early", "named upper", "named lower", "nameless late"]
+
     def test_the_panes_themselves_are_ordered_by_when_they_began(self, sticky):
         """Across panes there is nothing to compare but the clock."""
         def gone(ident, pane, created, abs_line):

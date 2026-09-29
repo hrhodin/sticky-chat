@@ -355,7 +355,9 @@ above everything that does have a row here, ordered by the pane they were
 taken in and then by their row in it. Within one pane that row is still
 exact, which matters because going back to annotate something further up
 makes a later note that belongs earlier. Across panes there is nothing to
-compare but the clock, so the panes go in the order they began.
+compare but the clock, so the panes go in the order they began — and a note
+old enough that no pane was recorded for it has no position at all, so it
+goes by its clock too.
 
 Which side of you such a note falls is the one thing left to guess at, and
 it is guessed by time: an agent appends, so a note taken after the last

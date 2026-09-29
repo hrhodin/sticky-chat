@@ -422,8 +422,15 @@ def history_order(placed: list[dict]) -> list[dict]:
         note = item["note"]
         if item.get("here", True):
             return (1, "", note.get("abs_line", 0))
-        return (0, began.get(note.get("pane", ""), ""),
-                note.get("abs_line", 0))
+        pane = note.get("pane", "")
+        if not pane:
+            # Older notes than the day sticky began writing down which pane
+            # it measured them in. The row they carry belongs to a pane
+            # nobody can name, so it is not a position and sorting by it
+            # shuffles panes together. When they were taken is all they
+            # have, and all they need: they go where their clock says.
+            return (0, note.get("created", ""), 0)
+        return (0, began.get(pane, ""), note.get("abs_line", 0))
 
     return sorted(placed, key=where)
 
