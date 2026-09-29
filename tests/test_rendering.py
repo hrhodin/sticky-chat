@@ -809,6 +809,53 @@ class TestTypingInTheNotesPane:
             assert not sticky.typing_through(key), key
 
 
+class TestLightingLeavesYouWhereYouWere:
+    """A search moves the cursor, and that is the whole trouble with using
+    one to paint. Mid-selection it takes everything between the anchor and
+    wherever the match was - you reach for three words and get the
+    afternoon - so while a selection is being made, nothing is painted."""
+
+    class FakeTmux:
+        def __init__(self, state, option=""):
+            self.socket, self.state, self.option = "test", state, option
+            self.sent = []
+
+        def fmt(self, pane, fmt):
+            return self.state
+
+        def run(self, *args):
+            return self.option if args[0] == "show-options" else ""
+
+        def ok(self, *args):
+            self.sent.append(args)
+            return True
+
+        def option(self, *a):
+            return ""
+
+    def marks(self, sticky, monkeypatch, tm):
+        monkeypatch.setattr(sticky.commands, "Tmux", lambda socket: tm)
+        monkeypatch.setattr(sticky.commands, "resolve_project",
+                            lambda *a, **k: "/x")
+        args = argparse.Namespace(socket=None, pane="%1", project="/x",
+                                  store="/x", quiet=True)
+        assert sticky.cmd_marks(args) == 0
+        return [a for a in tm.sent if a[0] == "send-keys"]
+
+    def test_nothing_is_painted_while_a_selection_is_being_made(
+            self, sticky, monkeypatch):
+        tm = self.FakeTmux("1\t1\t40\t29")          # in mode, selecting
+        assert self.marks(sticky, monkeypatch, tm) == []
+
+    def test_nor_when_the_pane_is_not_reading_back(self, sticky, monkeypatch):
+        tm = self.FakeTmux("0\t0\t0\t0")
+        assert self.marks(sticky, monkeypatch, tm) == []
+
+    def test_nor_when_it_has_been_turned_off(self, sticky, monkeypatch):
+        tm = self.FakeTmux("1\t0\t40\t29", option="off")
+        assert self.marks(sticky, monkeypatch, tm) == []
+
+
 class TestTheLog:
     """What the sidebar decided, and the rows behind it.
 

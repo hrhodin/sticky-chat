@@ -305,6 +305,13 @@ corner of an eye rather than read. Only the eight most recent, and only
 their first forty characters, because that search runs inside the tmux
 server and every pane waits while it does.
 
+A search also *moves*, which is not what entering copy mode meant, so both
+halves of where you were are put back afterwards: the view and the cursor
+inside it. And while a selection is being made, nothing is painted at all —
+a cursor that jumps with an anchor down takes everything between the two
+with it, which is how reaching for three words got you the afternoon. To
+have none of it, `set -g @sticky_marks off` in `~/.sticky/user.conf`.
+
 Inside the sidebar the letters work on their own, without the prefix:
 
 | key | what it does |

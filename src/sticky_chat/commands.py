@@ -1701,28 +1701,55 @@ def cmd_marks(args) -> int:
     """
     tm = Tmux(args.socket)
     pane = args.pane
-    if not pane or tm.fmt(pane, "#{pane_in_mode}") != "1":
+    if not pane:
+        return 0
+    # Three questions in one invocation: is this pane reading back at all,
+    # is a selection being made in it, and where the view and the cursor
+    # are - because everything below has to put those two back.
+    try:
+        state = tm.fmt(pane, "#{pane_in_mode}\t#{selection_present}"
+                             "\t#{scroll_position}\t#{copy_cursor_y}")
+    except RuntimeError:
+        return 0
+    mode, _, rest = state.partition("\t")
+    selecting, _, rest = rest.partition("\t")
+    scrolled, _, cursor = rest.partition("\t")
+    if mode.strip() != "1":
         return 0                        # not reading back: nothing to paint
+    if selecting.strip() == "1":
+        # A selection is being made right now. A search moves the cursor,
+        # and a moving cursor with an anchor down takes everything between
+        # the two with it: you reach for three words and get the afternoon.
+        return 0
+    if tm.run("show-options", "-gqv", "@sticky_marks").strip().lower() in (
+            "off", "0", "no", "false"):
+        return 0
     project = resolve_project(tm, pane, args.project)
     store = open_store(tm, pane, project, getattr(args, "store", None))
     pattern = mark_pattern(store.load())
     if not pattern:
         return 0
-    # A search jumps to a match, and being yanked somewhere else is not
-    # what scrolling back means. Where you were reading is put back
-    # afterwards; the highlighting is what was wanted and it stays.
-    try:
-        was = int(tm.fmt(pane, "#{scroll_position}") or 0)
-    except ValueError:
-        was = 0
+
+    def number(text: str, fallback: int = 0) -> int:
+        text = text.strip()
+        return int(text) if text.lstrip("-").isdigit() else fallback
+
+    # A search jumps to a match, and being yanked somewhere else is not what
+    # scrolling back means. Both halves of where you were have to go back:
+    # the view, and the cursor inside it. Putting only the view back leaves
+    # the cursor wherever the match was, which is the next selection you
+    # make starting somewhere you have never been.
+    was, sat = number(scrolled), number(cursor)
     tm.ok("send-keys", "-t", pane, "-X", "search-backward", pattern)
-    try:
-        now = int(tm.fmt(pane, "#{scroll_position}") or 0)
-    except ValueError:
-        now = was
+    after = tm.fmt(pane, "#{scroll_position}\t#{copy_cursor_y}")
+    now, _, seat = after.partition("\t")
+    now, seat = number(now, was), number(seat, sat)
     if now != was:
         tm.ok("send-keys", "-t", pane, "-X", "-N", str(abs(was - now)),
               "scroll-up" if was > now else "scroll-down")
+    if seat != sat:
+        tm.ok("send-keys", "-t", pane, "-X", "-N", str(abs(sat - seat)),
+              "cursor-up" if sat < seat else "cursor-down")
     if not getattr(args, "quiet", False):
         print("sticky: the annotated lines are lit while you read back")
     return 0

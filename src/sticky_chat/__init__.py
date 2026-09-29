@@ -71,6 +71,7 @@ from .commands import (
     cmd_fit,
     cmd_fork,
     cmd_list,
+    cmd_marks,
     cmd_note,
     cmd_place,
     cmd_quit,
