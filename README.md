@@ -286,9 +286,14 @@ sticky keeps it: a drag still marks, whatever the agent asked for. Only the
 drag, though — a **click** is still the agent's, so what it drew to be
 clicked stays clickable, and **alt**-drag lets a drag through untouched,
 for a program with its own scrollbars or its own selection. That last one is
-not about agents: it applies wherever something has asked for the mouse, and
-where nothing has, alt-drag still moves a pane as it does in tmux's own
-hands.
+not about agents: it applies wherever something has asked for the mouse.
+
+tmux's own pane gestures — `ctrl`-drag to pull a new pane out where you
+drag, `alt`-drag to move one about — are not offered inside a sticky window.
+It is an agent and its sidebar, and there is nowhere in that for a third
+pane to go: a stray one lands as a floating box drawn over the agent, three
+columns wide and impossible to account for. In any other pane both gestures
+are tmux's own, untouched.
 
 It is a mode of the agent's rather than a setting of sticky's, so it goes
 when you leave that view. Two things do behave differently while it is up,

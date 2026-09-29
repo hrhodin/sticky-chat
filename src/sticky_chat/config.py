@@ -284,10 +284,17 @@ bind -T root MouseDrag1Pane if -F '#{==:#{@sticky_role},claude}' { if -F '#{pane
 
 # ...and alt-drag is the way out, for any program that wants the mouse
 # itself: its own scrollbars, its own selection, whatever it draws that a
-# drag means something to. Held down, the drag goes through untouched. Where
-# nothing has asked for the mouse there is nothing to hand it to, so that
-# keeps `move-pane -M`, which is what alt-drag does in tmux's own hands.
-bind -T root M-MouseDrag1Pane if -F '#{mouse_any_flag}' 'send-keys -M' 'move-pane -M'
+# drag means something to. Held down, the drag goes through untouched.
+#
+# Where nothing has asked for the mouse, tmux's own alt-drag moves a pane
+# about - and ctrl-drag pulls a new one out of thin air, which is how a
+# window came to hold two floating shells, one three columns wide, drawn
+# over the agent as a pair of black boxes nobody could account for. A
+# sticky window is an agent and its sidebar, and there is nowhere in that
+# for a third pane to go, so neither gesture is offered inside one. In any
+# other pane both are tmux's own, untouched.
+bind -T root M-MouseDrag1Pane if -F '#{mouse_any_flag}' 'send-keys -M' 'if -F "#{==:#{@sticky_role},}" "move-pane -M"'
+bind -T root C-MouseDrag1Pane if -F '#{==:#{@sticky_role},}' 'new-pane -M'
 
 bind -T root MouseDown1StatusLeft select-pane -t "{next}"
 

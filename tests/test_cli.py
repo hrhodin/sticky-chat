@@ -277,6 +277,21 @@ class TestGeneratedConfig:
         assert "mouse_any_flag" not in agent, "the agent's wishes do not count"
         assert "mouse_any_flag" in rest, "everywhere else keeps tmux's rule"
 
+    def test_no_gesture_pulls_a_third_pane_into_a_sticky_window(self, config):
+        """A sticky window is an agent and its sidebar, and there is nowhere
+        in that for a third pane to go. tmux's ctrl-drag makes one where you
+        drag, and alt-drag moves one about - which left two floating shells,
+        one three columns wide, drawn over an agent as black boxes nobody
+        could account for."""
+        for key, gesture in (("C-MouseDrag1Pane", "new-pane -M"),
+                             ("M-MouseDrag1Pane", "move-pane -M")):
+            line = next(ln for ln in config
+                        if ln.startswith(f"bind -T root {key} "))
+            assert gesture in line, line
+            guard = line.split(gesture)[0]
+            assert "@sticky_role},}" in guard, (
+                f"{key} must ask whether the pane is one of ours: {line}")
+
     def test_alt_drag_goes_through_to_whatever_wants_the_mouse(self, config):
         """The way out, for a program with its own scrollbars or its own
         selection - and only where something has actually asked for the
