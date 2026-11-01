@@ -60,10 +60,21 @@ from the machine the terminal runs on:
 infocmp -x xterm-ghostty | ssh that-host -- tic -x -
 ```
 
-or run with one the remote already has — `TERM=xterm-256color sticky-chat
-…`. Ghostty can also do the copying itself, with
-`shell-integration-features = ssh-env,ssh-terminfo` in its config. Sticky
-says all of this when tmux refuses for that reason.
+On macOS that entry is not in the system database — it lives inside the
+terminal's app bundle — so `infocmp` needs pointing at it:
+
+```sh
+TERMINFO=/Applications/Ghostty.app/Contents/Resources/terminfo \
+  infocmp -x xterm-ghostty | ssh that-host -- tic -x -
+```
+
+Or run with a `TERM` the remote already has: `TERM=xterm-256color
+sticky-chat …`. Or let the terminal do it on connect — Ghostty ships that
+and has it off by default, so
+`shell-integration-features = cursor,no-sudo,title,ssh-env,ssh-terminfo,path`
+in its config turns it on (the setting replaces the whole list, hence the
+other defaults spelled out); kitty has `kitten ssh`. Sticky says all of this
+when tmux refuses for that reason.
 
 ## Install
 

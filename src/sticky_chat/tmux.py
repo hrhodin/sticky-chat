@@ -32,13 +32,23 @@ def why(said: str) -> str:
     """
     if "missing or unsuitable terminal" not in said:
         return ""
-    term = os.environ.get("TERM", "")
-    return (f"\n  this machine has no terminfo entry for {term or 'your TERM'}"
-            f", which tmux needs before it will start. Either copy it over "
-            f"from the machine you connected from:\n"
-            f"    infocmp -x {term} | ssh THIS-HOST -- tic -x -\n"
-            f"  or run sticky with one this machine already has:\n"
-            f"    TERM=xterm-256color sticky-chat ...")
+    term = os.environ.get("TERM", "") or "your TERM"
+    return (f"\n  no terminfo entry for {term} here, and tmux will not start "
+            f"without one. Any of:\n"
+            f"    TERM=xterm-256color sticky-chat ...   (works now, this "
+            f"machine)\n"
+            f"    infocmp -x {term} | ssh THIS-HOST -- tic -x -   (once, run "
+            f"on\n"
+            f"      the machine the terminal runs on - and on macOS that "
+            f"entry is\n"
+            f"      inside the app bundle, so TERMINFO=/Applications/"
+            f"<Terminal>.app/\n"
+            f"      Contents/Resources/terminfo has to go in front of "
+            f"infocmp)\n"
+            f"    let the terminal do it on connect: Ghostty's\n"
+            f"      shell-integration-features = ssh-env,ssh-terminfo, or "
+            f"kitty's\n"
+            f"      kitten ssh")
 
 
 class Tmux:
