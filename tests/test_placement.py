@@ -95,9 +95,11 @@ def test_a_row_remembered_in_another_pane_is_no_position_at_all(sticky):
     assert placed["row"] == 5, "it is on screen; the stale row said otherwise"
 
     missing = note(pane="%99", abs_line=9000, quote="gone", rows=["gone"])
-    where = sticky.resolve(VISIBLE, 0, 20, [missing], PANE)[0]
-    assert where["where"] == "above", \
-        "a note from another pane is out of reach, not further down this one"
+    gone = sticky.resolve(VISIBLE, 0, 20, [missing], PANE)[0]
+    assert gone["row"] is None and gone["match"] == "offscreen", \
+        "out of reach, and the sidebar lists it above like anything else"
+    assert "where" not in gone, \
+        "there is no above-or-below to decide any more"
 
 
 def test_only_the_newest_few_are_hunted_without_a_pin(sticky):
@@ -131,11 +133,17 @@ def test_an_exact_match_is_found_however_old_the_note_is(sticky):
     assert taken["pane"] == PANE, "and it is pinned here from now on"
 
 
-def test_a_note_with_no_row_here_is_placed_by_when_it_was_taken(sticky):
+def test_a_note_with_no_row_here_is_simply_not_on_a_row(sticky):
     """After a resume a note's row belongs to a pane that has gone, so it
-    cannot be compared with this screen. When it was taken can be: an agent
-    appends, so a note taken after the last moment known to be behind you is
-    ahead of you, and belongs under the map rather than over it.
+    cannot be compared with this screen - and nothing is guessed from that.
+    It is not on a row you can see, so the sidebar lists it above, in the
+    order `history_order` gives it: by position where that still means
+    something here, and by when it was taken where it does not.
+
+    There was a divider: the newest note of this pane's at or above the foot
+    of the screen was taken as the last moment behind you, and a note taken
+    after it was called "below" and drawn in a band at the foot. One list in
+    the same order costs nothing and needs no such reasoning.
     """
     here = note(id="here", abs_line=5, created="2026-09-20T10:00:00")
     older = note(id="older", quote="not on this screen", rows=["not here"],
@@ -146,17 +154,23 @@ def test_a_note_with_no_row_here_is_placed_by_when_it_was_taken(sticky):
     out = {p["id"]: p for p in
            sticky.resolve(VISIBLE, 0, len(VISIBLE), [here, older, newer], PANE)}
     assert out["here"]["row"] == 5, "the one with a row here still has it"
-    assert out["older"]["where"] == "above"
-    assert out["newer"]["where"] == "below"
+    for which in ("older", "newer"):
+        assert out[which]["row"] is None
+        assert out[which]["match"] == "offscreen"
+        assert "where" not in out[which]
 
 
-def test_with_nothing_to_measure_against_they_all_go_above(sticky):
-    """No note of this pane's on screen is no divider, and a guess about
-    which side of you something falls is worse than the old answer."""
+def test_the_order_of_what_is_listed_is_position_then_time(sticky):
+    """Which is `history_order`'s job, and the whole of what the above and
+    below bands were deciding between."""
+    here = note(id="here", abs_line=5, created="2026-09-20T10:00:00")
     gone = [note(id=f"g{n}", quote="nowhere", rows=["nowhere"], pane="%gone",
                  created=f"2026-09-2{n}T10:00:00") for n in range(3)]
-    out = sticky.resolve(VISIBLE, 0, len(VISIBLE), gone, PANE)
-    assert {p["where"] for p in out} == {"above"}
+    placed = sticky.resolve(VISIBLE, 0, len(VISIBLE), [here, *gone], PANE)
+    order = [item["id"] for item in sticky.history_order(placed)]
+    assert order.index("g0") < order.index("g1") < order.index("g2"), \
+        "with no position to go on, the order they were taken in"
+    assert order[-1] == "here", "and what is on screen is the newest end"
 
 
 def test_a_note_that_shares_no_long_word_is_never_compared(sticky):

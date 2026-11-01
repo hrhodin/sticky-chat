@@ -223,6 +223,9 @@ def test_the_new_tab_key_asks_for_a_project_and_completes_it(
         typed("Enter", wait=1.0)
         # And then which agent, opening on the one this was pressed in:
         # Enter takes it, so the common case is the keystrokes it always was.
+        typed("Enter", wait=0.5)
+        # And how much of the disk it may reach, opening on the fence the
+        # tab this was pressed in is running behind - here, none.
         typed("Enter", wait=3.0)
 
         opened = [line.split("\t") for line in tmux(
@@ -285,7 +288,8 @@ def test_the_new_tab_key_offers_another_agent(
         # It opens on `claude`, the tab this was pressed in. Type over it.
         typed("C-u")
         typed("shell")
-        typed("Enter", wait=3.0)
+        typed("Enter", wait=0.5)
+        typed("Enter", wait=3.0)        # and the fence, taken as offered
 
         opened = [line.split("\t") for line in tmux(
             "list-windows", "-t", "sticky",
@@ -301,6 +305,198 @@ def test_the_new_tab_key_offers_another_agent(
     finally:
         subprocess.run(["tmux", "-L", OUTER, "kill-server"],
                        capture_output=True)
+
+
+def replier(where) -> str:
+    """A stand-in agent that takes a turn whenever it is spoken to.
+
+    It prints for over a second, because that is how a turn of work is told
+    apart from a word echoed back by something that has stopped listening -
+    see `AUTO_WORKED`.
+    """
+    path = Path(where) / "replier.sh"
+    path.write_text(
+        "#!/bin/sh\n"
+        "n=0\n"
+        "printf 'turn %d done\\n> ' \"$n\"\n"
+        "while IFS= read -r line; do\n"
+        "    n=$((n+1))\n"
+        "    printf '\\ngot \"%s\" - working' \"$line\"\n"
+        "    i=0; while [ $i -lt 8 ]; do printf '.'; sleep 0.2; "
+        "i=$((i+1)); done\n"
+        "    printf '\\nturn %d done\\n> ' \"$n\"\n"
+        "done\n")
+    path.chmod(0o755)
+    return str(path)
+
+
+@pytest.mark.integration
+def test_lighting_the_marks_never_fails_on_a_real_store(
+        tmux, server, run_sticky, project, close_windows):
+    """The hook runs on every copy-mode entry, and tmux prints what it
+    printed - so a crash in here is a traceback across the pane on every
+    scroll, which is exactly what shipped once. It failed on `created`,
+    written as an ISO-8601 string by the store and read as a float here,
+    and no test noticed because the only notes any test made were made in
+    Python with a number in that field. This one makes them the way you do.
+    """
+    pane = run_sticky("start", project, "--detach", "--agent", "shell",
+                      "--agent-cmd", "bash --norc -i").strip()
+    close_windows.append(pane)
+    time.sleep(1.0)
+    tmux("send-keys", "-t", pane, "printf 'a quoted line\\n'", "Enter")
+    time.sleep(0.8)
+    for n in range(3):
+        run_sticky("add", "--pane", pane, "--note", f"note {n}",
+                   "--text", "a quoted line")
+
+    # In copy mode, which is the only state it does anything in, and with
+    # the quote really on the screen so that it gets as far as searching.
+    tmux("copy-mode", "-e", "-t", pane)
+    for _ in range(3):
+        run_sticky("marks", "--pane", pane)      # raises on a non-zero exit
+    assert tmux("display-message", "-p", "-t", pane,
+                "#{pane_in_mode}").strip() == "1", "and it is still reading"
+    tmux("send-keys", "-X", "-t", pane, "cancel")
+    # Out of a mode it is a no-op rather than an error, because the hook
+    # fires on the way out as well.
+    run_sticky("marks", "--pane", pane)
+
+
+@pytest.mark.integration
+def test_the_kill_key_stops_the_work_and_keeps_the_tab(
+        tmux, server, run_sticky, project, close_windows):
+    """`C-g k`, on the shape that prompted it: a script with a child in a
+    process group of its own, which is the child a terminal's Ctrl-C can
+    never reach."""
+    pane = run_sticky("start", project, "--detach", "--agent", "shell",
+                      "--agent-cmd", "bash --norc -i").strip()
+    assert pane
+    close_windows.append(pane)
+    time.sleep(1.5)
+    tmux("send-keys", "-t", pane,
+         f"{sys.executable} -c \"import subprocess; "
+         f"subprocess.Popen(['sleep','900'], start_new_session=True); "
+         f"subprocess.run(['sleep','900'])\"", "Enter")
+    for _ in range(40):
+        listed = run_sticky("kill", "--list", "--pane", pane)
+        if listed.count("sleep 900") == 2:
+            break
+        time.sleep(0.3)
+    assert listed.count("sleep 900") == 2, \
+        f"both the foreground child and the detached one:\n{listed}"
+
+    run_sticky("kill", "--yes", "--pane", pane, "--quiet")
+    for _ in range(40):
+        if not run_sticky("kill", "--list", "--pane", pane).strip():
+            break
+        time.sleep(0.3)
+    assert not run_sticky("kill", "--list", "--pane", pane).strip(), \
+        "everything it started is gone"
+    assert tmux("display-message", "-p", "-t", pane,
+                "#{pane_dead}").strip() in ("0", ""), "and the tab is not"
+    assert tmux("show-options", "-pqv", "-t", pane,
+                "@sticky_partner").strip(), "sidebar still beside it"
+    assert not subprocess.run(["pgrep", "-f", "sleep 900"],
+                              capture_output=True).stdout.strip(), \
+        "and nothing was left running on the machine"
+
+
+@pytest.mark.integration
+def test_nothing_to_stop_is_said_rather_than_done(tmux, server, run_sticky,
+                                                  project, close_windows):
+    """A tab sitting at a prompt has nothing under it, and a key that went
+    quiet would read as a key that failed."""
+    pane = run_sticky("start", project, "--detach", "--agent", "shell",
+                      "--agent-cmd", "bash --norc -i").strip()
+    close_windows.append(pane)
+    time.sleep(1.5)
+    assert not run_sticky("kill", "--list", "--pane", pane).strip()
+    run_sticky("kill", "--yes", "--pane", pane)
+    assert tmux("display-message", "-p", "-t", pane,
+                "#{pane_dead}").strip() in ("0", "")
+
+
+@pytest.mark.integration
+def test_an_armed_tab_carries_itself_on(tmux, server, run_sticky, project,
+                                        tmp_path, close_windows):
+    """`C-g a`. The agent stops because it thinks it has finished, and the
+    tab says `continue` for as long as it was asked to - then stops, which is
+    the half that matters: an arm is a count, not a switch."""
+    pane = run_sticky("start", project, "--detach", "--agent", "shell",
+                      "--agent-cmd", replier(tmp_path)).strip()
+    assert pane
+    close_windows.append(pane)
+    time.sleep(1.5)
+    # Somebody's own turn first, so the sidebar has seen the screen move and
+    # knows what a stop looks like here.
+    tmux("send-keys", "-t", pane, "-l", "hello")
+    tmux("send-keys", "-t", pane, "Enter")
+    time.sleep(3)
+    run_sticky("auto", "--add", "2", "--pane", pane, "--quiet")
+    assert tmux("show-options", "-pqv", "-t", pane,
+                "@sticky_autocontinue").strip() == "2"
+
+    for _ in range(80):
+        if not tmux("show-options", "-pqv", "-t", pane,
+                    "@sticky_autocontinue").strip():
+            break
+        time.sleep(0.5)
+    screen = tmux("capture-pane", "-p", "-S", "-400", "-t", pane)
+    assert screen.count('got "continue"') == 2, \
+        f"two turns asked for, {screen.count(chr(39))} seen:\n{screen}"
+    assert not tmux("show-options", "-pqv", "-t", pane,
+                    "@sticky_autocontinue").strip(), "and then it stops"
+
+
+@pytest.mark.integration
+def test_an_arm_stands_down_when_the_word_achieves_nothing(
+        tmux, server, run_sticky, project, close_windows):
+    """The rail that makes `C-g A` safe to press. `cat` takes the word and
+    echoes it, which is what an agent that has exited to a shell looks like:
+    without this the tab would type into it every few seconds all night."""
+    pane = run_sticky("start", project, "--detach", "--agent", "shell",
+                      "--agent-cmd", "cat").strip()
+    assert pane
+    close_windows.append(pane)
+    time.sleep(1.5)
+    run_sticky("auto", "--forever", "--pane", pane, "--quiet")
+    tmux("send-keys", "-t", pane, "-l", "wake")
+    tmux("send-keys", "-t", pane, "Enter")
+    for _ in range(60):
+        if not tmux("show-options", "-pqv", "-t", pane,
+                    "@sticky_autocontinue").strip():
+            break
+        time.sleep(0.5)
+    assert not tmux("show-options", "-pqv", "-t", pane,
+                    "@sticky_autocontinue").strip(), "it gave up"
+    screen = tmux("capture-pane", "-p", "-S", "-200", "-t", pane)
+    assert screen.count("continue") <= 2, \
+        f"it should try once, not keep trying:\n{screen}"
+
+
+@pytest.mark.integration
+def test_an_arm_is_a_count_that_stacks(tmux, server, run_sticky, project,
+                                       close_windows):
+    """Press it twice for ten. And `--forever` is the switch, which pressing
+    again turns off - the one state anybody needs out of in a hurry."""
+    pane = run_sticky("start", project, "--detach", "--agent", "shell",
+                      "--agent-cmd", "cat").strip()
+    close_windows.append(pane)
+    def armed():
+        return tmux("show-options", "-pqv", "-t", pane,
+                    "@sticky_autocontinue").strip()
+
+    run_sticky("auto", "--add", "--pane", pane, "--quiet")
+    assert armed() == "5"
+    run_sticky("auto", "--add", "--pane", pane, "--quiet")
+    assert armed() == "10", "stacking, because five is a guess at how long"
+    run_sticky("auto", "--forever", "--pane", pane, "--quiet")
+    assert armed() == "-1"
+    run_sticky("auto", "--add", "--pane", pane, "--quiet")
+    assert armed() == "-1", "adding to without-end is not a reduction"
+    run_sticky("auto", "--forever", "--pane", pane, "--quiet")
+    assert armed() == "", "and the same key takes it off again"
 
 
 def test_a_tab_with_no_agent_is_listed_on_the_other_row(

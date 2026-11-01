@@ -211,6 +211,32 @@ bind -T copy-mode    v send -X begin-selection
 bind -T copy-mode-vi y send -X copy-pipe-no-clear "@CLIP@"
 bind -T copy-mode    y send -X copy-pipe-no-clear "@CLIP@"
 
+# And the same on M-c, which is how a Mac's command-C can reach here.
+# Command is not a modifier tmux ever sees: macOS terminals consume it and
+# turn it into an action of their own, so command-C copies the *terminal's*
+# selection - and under tmux the terminal has no selection, because the drag
+# was tmux's. What a terminal can do is send something instead, and one line
+# of its config is enough: Ghostty takes `keybind = cmd+c=text:\\x1bc`,
+# which is Esc c, which arrives here as M-c. (Measured: tmux also turns the
+# kitty-protocol form, `\\x1b[99;9u`, into the same M-c, so either spelling
+# works.) Nothing else in sticky uses M-c, and the root binding below hands
+# it on to the agent where it would otherwise have gone.
+bind -T copy-mode-vi M-c send -X copy-pipe-no-clear "@CLIP@"
+bind -T copy-mode    M-c send -X copy-pipe-no-clear "@CLIP@"
+# Outside copy mode, M-c means whatever the pane means by it. In the note
+# prompt it is the copy key, which that prompt already spells C-c; in the
+# sidebar it is nothing, and a bare Esc forwarded there would let go of the
+# cursor; anywhere else - the agent's own pane - it is the agent's key and is
+# passed through untouched, so taking M-c costs nobody anything.
+# No `-t` on either, and that is not tidiness: a format inside braces is
+# not expanded, so `-t "#{pane_id}"` was passed to send-keys as those
+# fifteen characters, matched no pane, and failed without a word - command-C
+# in the note prompt did nothing at all. A key binding's default target is
+# the pane the key arrived at, which is the pane meant in both branches.
+# The bindings that *do* carry a format - the wheel, the clicks - put it in
+# a quoted string rather than in braces, which is where the difference is.
+bind -T root M-c if -F '#{==:#{@sticky_role},note}' { send-keys C-c } { if -F '#{!=:#{@sticky_role},sidebar}' { send-keys M-c } }
+
 # Dragging in the sidebar has no other purpose than copying, so it goes
 # straight to the system clipboard; over Claude a drag might become a note,
 # which is why that side does not touch the clipboard on its own.
@@ -218,6 +244,25 @@ bind -T copy-mode    y send -X copy-pipe-no-clear "@CLIP@"
 # makes the gesture forgiving: a drag that reaches into the prompt box is
 # taken as a plain copy, since that is your own half-written message. N above
 # has no --auto, so the keyboard always makes a note.
+# Middle-click pastes the last selection, the way it does in an X11
+# terminal. tmux binds this itself in the root table and almost gets it
+# right: its condition forwards the click whenever the pane is in a mode,
+# and sticky leaves the pane in copy mode on purpose - `copy-pipe-no-clear`
+# and `stop-selection` rather than a cancel, so what you selected stays lit.
+# So the one gesture that was meant to follow a selection was the one the
+# selection disabled, and marking text then middle-clicking did nothing at
+# all.
+#
+# Copy mode is left on the way through, like a printable key typed while
+# scrolled back: the paste belongs at the prompt, which is where it lands.
+# A pane drawing its own screen still gets the event, because an agent with
+# mouse reporting on has its own idea about button two - and the sidebar
+# gets nothing, because pasting text into a pane that reads every character
+# as a command is how four notes once went into the wrong conversation.
+bind -T copy-mode    MouseDown2Pane if -F '#{||:#{alternate_on},#{mouse_any_flag}}' { send -X cancel ; send-keys -M } { send -X cancel ; paste-buffer -p }
+bind -T copy-mode-vi MouseDown2Pane if -F '#{||:#{alternate_on},#{mouse_any_flag}}' { send -X cancel ; send-keys -M } { send -X cancel ; paste-buffer -p }
+bind -T root MouseDown2Pane if -F '#{==:#{@sticky_role},sidebar}' '' { select-pane -t = ; if -F '#{||:#{alternate_on},#{mouse_any_flag}}' { send-keys -M } { paste-buffer -p } }
+
 bind -T copy-mode-vi MouseDragEnd1Pane if -F '#{==:#{@sticky_role},claude}' { send -X copy-pipe-no-clear "@BIN@ add --socket '#{socket_path}' --client '#{client_name}' --pane '#{pane_id}' --sy '#{selection_start_y}' --sx '#{selection_start_x}' --ey '#{selection_end_y}' --ex '#{selection_end_x}' --hsize '#{history_size}' --scroll '#{scroll_position}' --auto" ; send -X stop-selection } { send -X copy-pipe-no-clear "@CLIP@" ; send -X stop-selection }
 bind -T copy-mode    MouseDragEnd1Pane if -F '#{==:#{@sticky_role},claude}' { send -X copy-pipe-no-clear "@BIN@ add --socket '#{socket_path}' --client '#{client_name}' --pane '#{pane_id}' --sy '#{selection_start_y}' --sx '#{selection_start_x}' --ey '#{selection_end_y}' --ex '#{selection_end_x}' --hsize '#{history_size}' --scroll '#{scroll_position}' --auto" ; send -X stop-selection } { send -X copy-pipe-no-clear "@CLIP@" ; send -X stop-selection }
 bind s run-shell -b '@BIN@ commit --quiet --socket "#{socket_path}" --pane "#{pane_id}"'
@@ -242,6 +287,31 @@ bind C run-shell -b '@BIN@ new --ask --virtual-rows @ROWS@ --socket "#{socket_pa
 # is already on screen is not offered, since opening it again would be a
 # second tab on a conversation that is still running.
 bind o run-shell -b '@BIN@ reopen --ask --socket "#{socket_path}" --client "#{client_name}" --from "#{pane_id}"'
+# k for kill, and it asks first, because what it stops is work: everything
+# the tab started and nothing the tab is. The pane's own process stays - an
+# agent keeps its conversation, a shell keeps its history - and what goes is
+# the test run, the build, the dev server that will not come back. It exists
+# because Ctrl-C does not always arrive: the terminal sends it to one
+# process group and a runaway three levels down sits in another, which is
+# exactly what happened to the run that prompted this.
+bind k confirm-before -p "stop what tab #I is running? (y/n)" 'run-shell -b "@BIN@ kill --yes --socket \"#{socket_path}\" --pane \"#{pane_id}\" --client \"#{client_name}\""'
+# a for again: the tab says `continue` when the agent stops of its own
+# accord, five more times, and pressing it again stacks. A for as long as it
+# takes, and again to stop - which is the only state anybody needs out of in
+# a hurry. Neither key is bound in tmux's own prefix table, so neither costs
+# anything. The clock that waits out a usage limit is a different thing and
+# arms itself; this one is asked for, because an agent that stops because it
+# has finished is usually right.
+bind a run-shell -b '@BIN@ auto --add --socket "#{socket_path}" --pane "#{pane_id}" --client "#{client_name}"'
+bind A run-shell -b '@BIN@ auto --forever --socket "#{socket_path}" --pane "#{pane_id}" --client "#{client_name}"'
+# B for box, b for out of it: the tab you are in moves behind a container, or
+# back onto your own machine, without closing. The agent restarts and resumes
+# - there is no moving a running process into a container - so the window,
+# the sidebar and the notes stay exactly where they are while the pane is
+# respawned under them. The conversation is carried across first, and the tab
+# refuses to move rather than arrive without it.
+bind B run-shell -b '@BIN@ refence --sandbox docker --socket "#{socket_path}" --pane "#{pane_id}" --client "#{client_name}"'
+bind b run-shell -b '@BIN@ refence --sandbox off --socket "#{socket_path}" --pane "#{pane_id}" --client "#{client_name}"'
 # `pane-activity`, which is how the sidebar hears that Claude has printed, is
 # set by `install_hooks` rather than written here: it exists only in tmux
 # after 3.7c, and an unknown hook name makes the whole file fail to source.
@@ -315,7 +385,14 @@ bind -T root MouseDown1Status { if -F "#{@sticky_log}" { run-shell -b '@BIN@ tra
 bind -T root MouseUp1Pane if -F '#{==:#{@sticky_role},sidebar}' 'run-shell -b "@BIN@ click --socket \\"#{socket_path}\\" --client \\"#{client_name}\\" --pane \\"#{pane_id}\\" --y \\"#{mouse_y}\\" --x \\"#{mouse_x}\\""'
 bind -T root DoubleClick1Pane if -F '#{==:#{@sticky_role},sidebar}' 'run-shell -b "@BIN@ click --edit --socket \\"#{socket_path}\\" --client \\"#{client_name}\\" --pane \\"#{pane_id}\\" --y \\"#{mouse_y}\\" --x \\"#{mouse_x}\\""'
 
-bind -T root WheelUpPane if -F '#{==:#{@sticky_role},sidebar}' 'send-keys -t "#{pane_id}" C-y' 'if -F "#{||:#{alternate_on},#{pane_in_mode},#{mouse_any_flag}}" "send-keys -M" "copy-mode -e"'
+# The first notch scrolls, rather than only arriving. `copy-mode -e` on its
+# own enters the mode and moves nothing, so a wheel turn in a pane at the
+# bottom of its history did nothing at all and the next one jumped five
+# lines - which reads as a scroll that is broken rather than one that has a
+# mode to enter first. Five, the same as every notch after it, because the
+# copy-mode bindings below use five and a first notch of a different size is
+# the same complaint in a smaller shape.
+bind -T root WheelUpPane if -F '#{==:#{@sticky_role},sidebar}' 'send-keys -t "#{pane_id}" C-y' 'if -F "#{||:#{alternate_on},#{pane_in_mode},#{mouse_any_flag}}" "send-keys -M" { copy-mode -e ; send -X -N 5 scroll-up }'
 
 # And once you are in copy mode over a pane that draws its own screen, the
 # wheel has to go back to it. There is no scrollback on an alternate screen,
@@ -335,8 +412,28 @@ bind -T root WheelDownPane if -F '#{==:#{@sticky_role},sidebar}' 'send-keys -t "
 # leaving it costs nothing: the command does nothing for a pane that is not
 # in a mode. It is the same hook the sidebar is woken by.
 set-hook -g pane-mode-changed { if -F "#{==:#{@sticky_role},claude}" { run-shell -b '@BIN@ marks --quiet --socket "#{socket_path}" --pane "#{pane_id}"' } }
-set-hook -ga pane-mode-changed { if -F "#{@sticky_sidebar_pid}" { run-shell -b "kill -USR1 #{@sticky_sidebar_pid} 2>/dev/null || true" } ; run-shell -b '@BIN@ fit --socket "#{socket_path}"' }
+# The fit is for this window and no other. Entering copy mode changes no
+# geometry anywhere, and a global fit here woke all ten sidebars on every
+# wheel turn - ten processes capturing, re-placing and redrawing at once,
+# twice over, because reaching the bottom of the history leaves copy mode
+# again. That is the freeze that followed a scroll. The signal above
+# already wakes the one sidebar that has something to redraw; what is left
+# for the fit is this window's own geometry.
+set-hook -ga pane-mode-changed { if -F "#{@sticky_sidebar_pid}" { run-shell -b "kill -USR1 #{@sticky_sidebar_pid} 2>/dev/null || true" } ; run-shell -b '@BIN@ fit --socket "#{socket_path}" --wake "#{window_id}"' }
 
+# `C-g 1`-`9` hands the pending batch to that numbered tab - but only from
+# the sidebar, where the notes are. Everywhere else the digit still selects
+# the window, which is what tmux has always done with it and what the muscle
+# knows; taking that for a send would have cost a key people use all day to
+# buy one they use now and then.
+#
+# It is behind the prefix because it used to be a bare digit in the sidebar,
+# where letters are forwarded to the agent so you can start typing at the
+# pane your eye is on. A digit was intercepted instead, and intercepted it
+# pasted the whole batch into another conversation with nothing asked and
+# nothing said: typing a message with a `2` in it sent four notes into
+# another tab. Two keystrokes is the price of that not happening.
+@DIGITS@
 bind u run-shell -b '@BIN@ uncommit --quiet --socket "#{socket_path}" --pane "#{pane_id}"'
 bind U run-shell -b '@BIN@ uncommit --quiet --socket "#{socket_path}" --pane "#{pane_id}"'
 bind F run-shell -b '@BIN@ fork --quiet --socket "#{socket_path}" --pane "#{pane_id}" --client "#{client_name}"'
@@ -547,6 +644,30 @@ def typing_keys() -> str:
     return "\n".join(lines)
 
 
+def send_to_tab_keys(binary: str = "@BIN@") -> str:
+    """`C-g 1`-`9`: hand the pending batch to that tab, from the sidebar.
+
+    Nine bindings rather than one, because tmux binds a key and not a range,
+    and each has to carry its own number. Each keeps tmux's own
+    `select-window` as the other branch, so the digit does what it has
+    always done everywhere except the one pane where a batch of notes is
+    the thing you are holding.
+    """
+    # The binary is passed in rather than left as `@BIN@`: this text is
+    # spliced into the template *after* the template's own `@BIN@` has been
+    # substituted, so a marker left here would reach the file unreplaced -
+    # which it did, and nine bindings pointed at a program called `@BIN@`.
+    lines = []
+    for number in range(1, 10):
+        lines.append(
+            f"bind {number} if -F '#{{==:#{{@sticky_role}},sidebar}}' "
+            f"""'run-shell -b "{binary} commit --to-tab {number} --quiet """
+            f"""--socket \\"#{{socket_path}}\\" """
+            f"""--pane \\"#{{pane_id}}\\""' """
+            f"'select-window -t :={number}'")
+    return "\n".join(lines)
+
+
 def write_config(bin_path: str) -> str:
     private_dir(STATE_HOME)
     path = os.path.join(STATE_HOME, "tmux.conf")
@@ -556,6 +677,7 @@ def write_config(bin_path: str) -> str:
                  .replace("@HOME@", STATE_HOME)
                  .replace("@ROWS@", str(DEFAULT_VIRTUAL_ROWS))
                  .replace("@TYPING@", typing_keys())
+                 .replace("@DIGITS@", send_to_tab_keys(bin_path))
                  .replace("@LABEL@", STICKY_LABEL)
                  .replace("@AGENTROW@", AGENT_ROW)
                  .replace("@OTHERROW@", OTHER_ROW)

@@ -10,12 +10,11 @@ import tempfile
 import time
 
 from .agents import CLAUDE, Agent, agent_named
+from .sandbox import inner_command, rejoin, split_command
 from .tmux import Tmux
-from .util import die
+from .util import STATE_HOME, die
 
 # ---------------------------------------------------------------- constants
-
-STATE_HOME = os.path.expanduser(os.environ.get("STICKY_HOME", "~/.sticky"))
 
 
 # -------------------------------------------------------------------- store
@@ -26,7 +25,8 @@ SESSION_FLAGS = CLAUDE.session_flags      # the default profile's, for callers
 
 def names_a_session(command: str, agent: Agent = CLAUDE) -> bool:
     """True when the command line already says which conversation to open."""
-    return any(word in agent.session_flags for word in command.split())
+    return any(word in agent.session_flags
+               for word in inner_command(command).split())
 
 
 def windows_dir() -> str:
@@ -64,6 +64,26 @@ def record_window(session: str, touch: bool = True, **fields) -> None:
         os.replace(tmp, path)
     except (OSError, ValueError, json.JSONDecodeError):
         pass                            # remembering is a convenience, not a duty
+
+
+def in_tab_order(records: list[dict]) -> list[dict]:
+    """The same tabs, in the order they sat on screen.
+
+    `known_windows` answers "which tabs are there" newest-first, which is
+    the right order for a list you are choosing from. It is the wrong order
+    for putting a set back: reopened newest-first, a session came back with
+    its tabs shuffled into the order they had last been *touched*, which is
+    nobody's order - the tab you reach for by its number was somewhere else
+    every time.
+
+    `index` is where the tab was, recorded when it was made and refreshed
+    while it runs. A record from before that was written down has none, and
+    goes after the ones that do, oldest first - which is the order they were
+    made in, and the closest thing to where they were.
+    """
+    return sorted(records, key=lambda r: (r.get("index") is None,
+                                          r.get("index") or 0,
+                                          r.get("created") or 0))
 
 
 def known_windows() -> list[dict]:
@@ -229,7 +249,7 @@ def session_named(command: str, agent: Agent = CLAUDE) -> str:
     once the agent has picked one, so that case comes back empty. So does an
     agent whose profile has no way to name a conversation at all.
     """
-    words = command.split()
+    words = inner_command(command).split()
     for flag in agent.id_flags:
         if flag in words:
             index = words.index(flag)
@@ -245,7 +265,8 @@ def without_session(command: str, agent: Agent = CLAUDE) -> str:
     id as well: an agent will not open a session that is already open, so the
     tab dies the moment it starts and leaves its sidebar alone on screen.
     """
-    words, out, skip = command.split(), [], False
+    fence, inside = split_command(command)
+    words, out, skip = inside.split(), [], False
     for index, word in enumerate(words):
         if skip:
             skip = False
@@ -261,7 +282,7 @@ def without_session(command: str, agent: Agent = CLAUDE) -> str:
         if word in agent.bare_session_flags:
             continue
         out.append(word)
-    return " ".join(out)
+    return rejoin(fence, " ".join(out))
 
 
 def with_words(command: str, words: list[str], agent: Agent = CLAUDE) -> str:
@@ -275,10 +296,14 @@ def with_words(command: str, words: list[str], agent: Agent = CLAUDE) -> str:
     """
     if not words:
         return command
+    # On the agent's own half of the line. A conversation id put "first,
+    # before anything that would make it an argument to something else"
+    # lands on `docker run` if the fence is not taken off first.
+    fence, inside = split_command(command)
     if not agent.words_first:
-        return " ".join([command, *words])
-    program, _, rest = command.partition(" ")
-    return " ".join([program, *words, rest]).rstrip()
+        return rejoin(fence, " ".join([inside, *words]))
+    program, _, rest = inside.partition(" ")
+    return rejoin(fence, " ".join([program, *words, rest]).rstrip())
 
 
 def session_dir(project: str, session: str) -> str:

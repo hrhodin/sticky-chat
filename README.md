@@ -39,6 +39,11 @@ Start it with `sticky-chat` (or shorthands `sticky claude`)  and possible argume
   Gemini CLI and Codex CLI have profiles of their own, and `--agent-cmd`
   runs anything else that prints a transcript.
 - macOS or Linux; Windows only inside WSL. No admin rights are needed.
+- **docker or podman**, only if you want a tab to run the agent inside a
+  container — see [keeping the agent inside a
+  fence](#keeping-the-agent-inside-a-fence). Either will do and they are
+  offered side by side. Without one, tabs open as they always did and the
+  prompt says why.
 
 If tmux is missing: `brew install tmux` on macOS, `apt install tmux` or
 `dnf install tmux` on Linux. Copying to the system clipboard uses `pbcopy`,
@@ -156,7 +161,81 @@ clock after them. To have none of it:
 set -g @sticky_continue off
 ```
 
-That takes hold at the next notice, without a reload. A deadline that falls
+That takes hold at the next notice, without a reload.
+
+### The lit lines while you read back
+
+Scrolling back in an agent pane lights the rows you have notes on, using
+tmux's own search highlighting. That search costs tmux the whole history and
+marks every match in it, so it is kept on a leash: only quotes that actually
+appear in the last couple of thousand rows are looked for — notes from an
+hour ago are not on the screens you are reading, and searching for something
+absent is the most expensive search there is — and only as many of them as
+the history can afford, newest and still-pending first. A tab that has
+printed a couple of hundred thousand lines is left unlit altogether, because
+lighting it would cost most of a second with the tmux server blocked, and
+every pane in the session draws through that server. The notes are all in
+the sidebar either way.
+
+`set -g @sticky_marks off` in `~/.sticky/user.conf` turns the lighting off
+entirely.
+
+### Stopping what a tab is running
+
+`C-g k` stops everything the tab started and nothing the tab is: the test
+run, the build, the dev server that will not come back. The pane's own
+process stays, so an agent keeps its conversation and a shell keeps its
+history — for the tab itself there is tmux's own `prefix &`. It asks before
+it acts, and `sticky-chat kill --list` says what it would stop without
+stopping anything.
+
+It exists because Ctrl-C does not always arrive. A terminal sends the
+keystroke to the pane's *foreground process group*, and a runaway three
+levels down often sits in a group of its own: a script that spawned a `node`
+that drives an app, say, where Ctrl-C reaches the script, the script traps
+it, and the thing actually burning the afternoon never hears about it. This
+goes by parentage instead — everything descended from the pane's process,
+deepest first — and then by terminal, which catches a job whose parent has
+exited but which still holds the tty. SIGINT first, then SIGTERM for what
+traps it, then SIGKILL; what survives all three is named rather than
+retried.
+
+One thing it cannot see: a child that detached from the terminal as well as
+from its parent — a `setsid`, a daemon — keeps nothing that says which tab
+it came from. `--list` shows what can be traced, and the rest is a `pkill`
+of yours.
+
+### Carrying on where the agent stopped
+
+The clock above waits out a limit nobody chose. The other half of the same
+wish is an agent that stops because it thinks it has finished, and that one
+has to be asked for: an agent which says it is done is usually right, and a
+tab that argued with it every time would be unusable.
+
+`C-g a` asks for five more turns, and it stacks — press it twice for ten.
+`C-g A` asks for all of them, until you say otherwise, and pressing it again
+is how you stop. A count rather than a switch, because the honest version of
+"keep going" is "keep going for a while and then let me look"; the switch is
+there for the times when you know it is an hour of work and you are going to
+bed. The sidebar carries `↺ carrying on, 5 more times` on its own row and
+`↺5` in the footer, so a tab that will start the next turn by itself never
+looks like one that has stopped.
+
+Each turn the arm starts costs one from the count, and two things spend the
+whole of it early, both on purpose. If the agent's window redraws to exactly
+what it was, the word achieved nothing. And if the turn stops printing within
+a second — which is what an agent that has exited to a shell and is echoing
+your word back looks like — the same. Without those, `C-g A` on a dead pane
+would type `continue` into it every few seconds until morning. An agent that
+genuinely finishes in under a second had nothing left to do either, so the
+arm standing down there is the right answer as well.
+
+`sticky-chat auto --add 20`, `--forever` and `--off` say the same from a
+shell, and the count lives on the agent's pane — `tmux show-options -p
+@sticky_autocontinue` answers what a tab is about to do, a reload keeps it,
+and nothing about it is remembered once the tab closes.
+
+A deadline that falls
 while the machine is asleep is not lost - the clock is a wall-clock time,
 compared on the first pass after the machine wakes, so it fires then rather
 than never.
@@ -207,7 +286,8 @@ meant.
 
 In the prompt, **Enter** saves and **Ctrl-U** clears the line. **Ctrl-S** or **Alt-Enter** saves the note
 and sends the whole batch to the agent without going via the sidebar; press
-Enter in the chat pane as you would after `C-g s`. **Ctrl-C** copies the selected text to the system clipboard and
+Enter in the chat pane as you would after `C-g s`. **Ctrl-C** — or ⌘C, with
+the terminal set up as [below](#command-c-on-a-mac) — copies the selected text to the system clipboard and
 closes without making a note. **Esc** on an empty note cancels it; Esc
 after typing keeps what you wrote, struck through in the sidebar — click
 its `x` to bring it back. Esc or Ctrl-C while editing an existing note
@@ -262,7 +342,11 @@ tmux keeps whatever prefix you configured.
 | `C-g C` | the same, but the tab gets a window taller than the terminal |
 | `C-g F` | fork this conversation into a new tab |
 | `C-g o` | reopen a closed tab: lists what is remembered, a number picks |
-| `1`-`9` in the sidebar | send the pending notes to that tab instead of this one |
+| `C-g B` `C-g b` | box this tab in a container, or take it back out |
+| `C-g a` `C-g A` | carry on for five more turns (stacks), or until told otherwise |
+| `C-g k` | stop what the tab is running — not the tab |
+| `y`, `M-c` in copy mode | copy the selection; ⌘C sends `M-c` with one line of terminal config |
+| `C-g 1`-`C-g 9` in the sidebar | send the pending notes to that tab instead of this one |
 | `C-g r` | reload: rewrite the config, restart the sidebars (`C-g R`) |
 | `C-g L` | print the pending notes into the pane |
 | `C-g n` `C-g w` | next tab, choose a tab |
@@ -277,6 +361,51 @@ selection becomes a note, the way it does in an X11 terminal. `y` in copy
 mode copies the live selection again, wherever you are, and leaves it
 highlighted, and Ctrl-C in the note prompt copies and closes without
 saving anything.
+
+**Middle-click pastes** the last selection, the way it does in an X11
+terminal: mark something, middle-click, it appears at the prompt. Under tmux
+the mark belongs to tmux rather than to your terminal, so there is no X11
+PRIMARY selection involved — what middle-click pastes is tmux's own buffer,
+which is what every selection here fills. It works the same on macOS, where
+there is no PRIMARY at all. A pane that draws its own screen still gets the
+click, since an agent with mouse reporting on has its own idea about button
+two, and the sidebar is never pasted into, because it reads every character
+as a command. (Selecting in another application and middle-clicking here
+needs the real PRIMARY selection, which sticky does not read — the buffer is
+tmux's own.)
+
+In the sidebar, any character it has no use for is forwarded to the chat
+pane, so you can start typing with your eye still on the notes — and digits
+are among them. `C-g 1`-`9` is what hands the pending batch to another tab;
+a bare digit types. It used to be the bare digit that sent, which is a trap:
+type a message with a `2` in it while the sidebar has focus and the batch
+goes into another conversation, silently and with nothing asked. Outside the
+sidebar `C-g <digit>` still selects that window, the way tmux has always
+done.
+
+### Command-C on a Mac
+
+Command is not a modifier tmux can ever see: macOS terminals consume it and
+turn it into an action of their own, so ⌘C copies the *terminal's*
+selection — and under tmux there is no terminal selection, because the drag
+belonged to tmux. What a terminal can do is send something instead, and
+sticky binds what it sends. One line of terminal config:
+
+```sh
+# Ghostty: ~/Library/Application Support/com.mitchellh.ghostty/config
+keybind = cmd+c=text:\x1bc
+```
+
+In iTerm2 the same thing is Settings → Keys → Key Bindings, ⌘C → *Send
+Escape Sequence*, with `c` as the sequence. Terminal.app cannot remap ⌘C at
+all, so there `y` and the copy-on-selection are what you have.
+
+That sends Esc-c, which arrives as `M-c`, and sticky binds `M-c` to copy
+wherever a selection can be copied: the live selection in copy mode, and
+the quote in the note prompt, where it does what Ctrl-C does there. Outside
+those it is handed to the agent untouched, so taking the key costs nothing.
+The trade-off is the one you are asking for: ⌘C stops copying the
+terminal's own selection, which under tmux there never is.
 
 An agent can ask for the mouse. Claude Code does while it draws its
 multi-agent view — the one with `← for agents` in the footer and things
@@ -374,18 +503,19 @@ compare but the clock, so the panes go in the order they began — and a note
 old enough that no pane was recorded for it has no position at all, so it
 goes by its clock too.
 
-Which side of you such a note falls is the one thing left to guess at, and
-it is guessed by time: an agent appends, so a note taken after the last
-moment known to be behind you is probably ahead of you, and goes under the
-map rather than over it. Probably, not certainly — that is the one place
-where going back to annotate upwards can put a note on the wrong side.
-Below the map, over a rule of its own, is the same list for the notes
-*below* what you can see — the ones the pane has not reached yet, nearest
-one at the top.
+There is one list and it is above, whatever the reason a note is not on a
+row: its text has scrolled off the top, its text is further down than the
+screen reaches, the sidebar has no room for its row, or it was taken in a
+pane that has since gone and its row means nothing here. Ordered by
+position where that still means something in this pane, and by when it was
+taken where it does not. There used to be a second band at the foot for the
+notes whose text was past the bottom edge, which meant guessing which side
+of you an unplaceable note fell on — by time, since an agent appends — and
+sizing two bands against each other. The list above was in the same order
+anyway.
 
 The bottom row is the footer: what is pending, `↑` how many notes are above
-the screen, `↓` how many are below, `u unmark` once anything has been sent,
-and `? help`. While anything is pending, the row above reads
+the screen, `u unmark` once anything has been sent, and `? help`. While anything is pending, the row above reads
 `s submits · C-g s from the chat pane`. The status line at the very bottom of the
 window carries `s`, `c`, `n`, `w` and `d`, and the sidebar shows the full
 help panel until you take your first note.
@@ -407,6 +537,10 @@ back the map is frozen, so nothing moves under you.
 | `sticky-chat commit --at WHEN` | send later: `4h`, `90m`, `00:32`, `2026-09-16 00:32`, or `cancel` |
 | `sticky-chat uncommit [id…] [--all]` | mark sent notes pending again; default is the last batch |
 | `sticky-chat fork` | branch the conversation into a new tab |
+| `sticky-chat sandbox [--build [HOW]] [--set off\|docker\|podman\|bwrap]` | what fences an agent tab, build the image for an engine, change the default |
+| `sticky-chat refence --sandbox off\|docker\|podman\|bwrap` | move a running tab into a box, or out of one |
+| `sticky-chat auto [--add N] [--forever] [--off]` | say `continue` when the agent stops of its own accord |
+| `sticky-chat kill [--list]` | stop everything the tab started, keeping the tab |
 | `sticky-chat restore` | reopen a sidebar you closed |
 | `sticky-chat reload` | rewrite the config and restart every sidebar |
 | `sticky-chat quit` | close every window and stop the agents in them |
@@ -510,6 +644,12 @@ within a heartbeat of each other, and one you closed at lunchtime is hours
 behind them. A clean `sticky-chat quit` is the same question with the same
 answer.
 
+They come back in the order they sat in, left to right, not the order they
+were last used — a tab remembers its own number while it runs, so the one
+you reach for by pressing `4` in the sidebar is the one that was there
+before. A tab remembered from before this was written down has no number
+kept for it and comes back after the ones that do, oldest first.
+
 The set is named and taken as a set, the way it went away:
 
 ```
@@ -534,38 +674,203 @@ fresh one, and says so.
 ## Keeping the agent inside a fence
 
 An agent run with `--dangerously-skip-permissions` can do anything you can:
-read every file you own, change them, delete them. Three fences, from the
-cheapest to the strongest, and all three leave sticky working — it reads the
+read every file you own, change them, delete them. A tab can put a fence
+around it, and the fence does not get in sticky's way — sticky reads the
 *terminal*, not the agent, so a fenced agent still gets its notes taken.
 
-**The agent's own permissions.** `--permission-mode` and `--allowedTools` /
-`--disallowedTools` on the command line, or `permissions.allow` and
-`permissions.deny` in `~/.claude/settings.json`, which takes patterns like
-`Read(./secrets/**)` and `Bash(rm:*)`. Cheapest, and the agent is policing
-itself: a tool it does not go through is not covered.
+The prompt that opens a tab (`C-g c`) asks for it on the third line, under
+the project and the agent:
 
-**A macOS sandbox.** `docs/agent-sandbox.sb` is a Seatbelt profile that lets
-the agent read what it likes and write only in the project, its own
-transcript directory and the scratch directories a terminal program needs -
-with `~/.ssh`, `~/.gnupg` and `~/.netrc` not even readable. The kernel
-enforces it, so it holds whatever the agent decides to do:
-
-```sh
-sticky-chat start ~/Code/thing --agent-cmd "sandbox-exec \
-  -f ~/.sticky/agent.sb -D PROJECT=$HOME/Code/thing \
-  -D HOME_CLAUDE=$HOME/.claude -D HOME_STICKY=$HOME/.sticky \
-  -D SSH=$HOME/.ssh -D GNUPG=$HOME/.gnupg -D NETRC=$HOME/.netrc claude"
+```
+project> ~/Code/thing
+agent>   claude
+sandbox> docker
 ```
 
-`--agent-cmd` takes a command line, so anything that ends by running the
-agent goes in front of it: `sandbox-exec`, `env`, `nice`, `docker run`.
+`off` runs the agent on your disk as you, which is what every tab did before
+this existed. `docker` and `podman` run it in a container that has this
+project bind mounted at its own path and nothing else of yours: no other
+repository, no `~/.ssh`, no browser profile, no disk to delete. The two are
+the same fence through different engines — the same image, the same mounts,
+the same tab — and a machine with both offered is offered both. On Linux there
+is a fourth answer, `bwrap`, described below. What you answer is remembered
+and is what the next prompt opens on, wherever you press the key; until you
+have answered once it opens on the fence the tab you pressed it in is running
+behind. `--sandbox off|docker|podman|bwrap` says it without the prompt, and
+`sticky-chat sandbox --set podman` changes the default without opening a tab.
 
-**A container.** Strongest, and the one that also fences the network: run
-the agent in a container with only the project mounted, and give the tab
-`--agent-cmd "docker run --rm -it -v $PWD:/work ..."`. What it costs is the
-agent's transcript, which then lives in the container - sticky reads that
-file to know when a limit has been hit, so mount `~/.claude` too if you want
-the clock to keep working.
+The first tab that asks a given engine for a container builds the image,
+which takes about a minute and happens once per engine — docker and podman
+keep separate image stores, so the tag one of them has is not there for the
+other. It is built from `~/.sticky/sandbox/Dockerfile`, written the first
+time and never rewritten afterwards — add the toolchain your projects need to
+it and run `sticky-chat sandbox --build`, or `--build podman` to say which
+store you mean. `sticky-chat sandbox` on its own says what this machine can
+run, which images are built, and where the agent's home is.
+
+**What is in the image.** Debian 12 with Node 22 (`node:22-bookworm-slim`),
+`git`, `ripgrep`, `curl`, `less` and `procps`, the agent installed from npm,
+and a user account with your own uid and gid so that what it writes into the
+project belongs to you and an agent that refuses to skip permission prompts
+as root will start. About 1 GB on disk. What is *not* in it is your
+project's toolchain: a Python or a Rust project wants its compiler added to
+the Dockerfile.
+
+sticky ships the recipe, not the image: no registry, nothing pulled, and the
+twenty lines that make the thing an agent runs inside are a file you can
+read and change. The account inside has to carry your uid, which an image
+built somewhere else cannot know, and the toolchain is yours rather than
+ours — both point the same way.
+
+**How a container tab is still a tmux tab.** tmux starts `docker run -it …`
+(or `podman run -it …`) as the tab's command, the client hands the
+container's stdio to that pane's terminal, and the agent draws into the pane
+exactly as it did before.
+tmux, sticky, the sidebar, the notes and the placer all stay on your
+machine. Only the agent is inside.
+
+Three details make it fit rather than merely run:
+
+*The project is at the same path inside.* `/Users/you/Code/thing` is mounted
+onto `/Users/you/Code/thing`, not onto `/workspace`, so every path either
+side names is the same path — including the directory the agent files its
+transcript under, which is named after the project's own path.
+
+*The home comes back out.* The container's home is `~/.sticky/sandbox/claude`
+on your machine, so the login survives the container and the transcript the
+sidebar reads — the record that says the agent has run out of turns — is a
+file sticky can open without entering the container. That is also what makes
+`continue` work in a fenced tab. One home for both engines, because both of
+them are made to run as you: the login you gave in a docker tab is the login
+a podman tab starts with.
+
+*Logging in happens once, inside.* Your host login lives in the macOS
+Keychain, which a Linux container cannot read, so the first fenced tab shows
+Claude Code's own sign-in and keeps it in that home. `ANTHROPIC_API_KEY` or
+`CLAUDE_CODE_OAUTH_TOKEN` in your environment is passed through instead, if
+you work that way.
+
+Everything else about the tab carries on working: the conversation id goes
+on the agent's half of the command line and never onto `docker run`, and a
+sandboxed tab is remembered as sandboxed, so `resume` and `C-g o` bring it
+back in its container.
+
+### Boxing a tab you are already in
+
+`C-g B` moves the tab you are in into a container; `C-g b` brings it back
+out. Nothing around it moves: the same window in the same place, the same
+sidebar, the same notes in the same store, the same conversation. tmux
+respawns the pane rather than opening a tab, which is what keeps the pane and
+everything hung off it.
+
+What does not survive is the agent's process. There is no moving a running
+one into a container, so it restarts, resumes and replays the conversation
+onto a fresh screen — a turn in flight is interrupted, and the notes
+re-place themselves against the replay exactly as they do after `resume`.
+
+The conversation is carried across first. It lives in
+`~/.claude/projects/<project>/<id>.jsonl`, and the container's home is a
+different home, so without the copy `--resume` would come back as a brand-new
+conversation wearing the old notes. Because the project is mounted at its own
+path the directory name is identical on both sides, so it is a copy and
+nothing more; newer wins, so an hour spent in the box comes back out with
+you. A tab whose conversation has no id written down — a bare `--continue`,
+or an agent that keeps its history in a database — refuses to move rather
+than arrive empty, and says so; `--anyway` moves it and starts fresh.
+
+Before anything is killed sticky checks that the fence can be had, that the
+image is built, and that the agent's own program exists inside it — a pane
+respawned on a command that is not there would take the window and the
+sidebar with it. None of those three stop the tab; they leave it running and
+say what to do. Building an image is never done from the key: a keystroke
+should not go quiet for three minutes, so a missing image sends you to
+`sticky-chat sandbox --build`.
+
+Unboxing takes the container with it, so boxing and unboxing all afternoon
+leaves one container and not a pile of them.
+
+`--sandbox-arg` is the escape hatch, repeatable, for anything else the
+container needs — another mount, another variable:
+
+```sh
+sticky-chat start ~/Code/thing --sandbox docker \
+  --sandbox-arg=-v "--sandbox-arg=$HOME/.gitconfig:/home/agent/.gitconfig:ro"
+```
+
+Written with `=`, because a value that starts with a dash is a flag to
+anything that reads a command line, `--sandbox-arg` included.
+
+**Linux and Windows.** The same, with two details. On Linux the uid in the
+image is doing real work — a bind mount there keeps the host's ownership, so
+a container running as anybody else leaves you files you cannot edit — and
+on a distribution with SELinux enforcing the mounts are labelled `:z`, or
+the tab would come up on a directory the container says is empty. Windows
+means WSL2, because that is where tmux runs: with Docker Desktop's WSL
+integration the paths are Linux paths and it is the Linux story exactly. A
+project under `/mnt/c` works and is slow, as it is for everything else.
+
+**podman, and the one way it is not docker.** podman runs rootless, which
+means it has already put you inside a user namespace by the time a container
+starts: there your own uid is the container's root and every number above it
+is a subuid, so asking for `--user 501` the way docker is asked would run the
+agent as a uid you have no account for and fill your project with files you
+cannot edit, while not asking would hand the agent root — which Claude Code
+will not skip permission prompts as. sticky adds
+`--userns=keep-id:uid=…,gid=…`, which maps you to you, and the tab then runs
+as your own uid with the project writable and owned by you. On Linux that
+flag needs the subuid ranges `useradd` normally writes into `/etc/subuid`; a
+machine without them has a podman that runs and a `keep-id` that does not. On
+macOS podman needs its virtual machine up (`podman machine init`, `podman
+machine start`) and shares `/Users`, `/private` and `/var/folders` with it,
+which covers where projects live. A fence whose engine is not answering says
+so at the prompt rather than taking the tab with it.
+
+**The namespace fence (`bwrap`), on Linux, and untested.** `--sandbox bwrap`
+draws the same fence without a container. [Bubblewrap][bwrap] makes a mount
+namespace and the agent runs in it as an ordinary process of yours, seeing
+the project at its own path, `~/.sticky/sandbox/<agent>` in place of your
+home, `/usr` and `/etc` read-only, a `/tmp` of its own, and none of the rest
+of your disk. No daemon, no image and nothing to build — and the compilers in
+there are the ones you already have, which is the whole reason to want it: a
+container image has to be taught Python, cargo and a JDK once per project,
+and a namespace inherits them. `sticky-chat sandbox` says whether this
+machine can run it, `sticky-chat refence --sandbox bwrap --pane <id>` moves a
+running tab into it — `C-g B` is the container's key and stays the
+container's — and everything else, notes, the sidebar, `resume`, the
+conversation carried across, works exactly as it does for a container. The
+two fences share the agent's home, so a tab moved from one to the other keeps
+its login and its transcript without copying anything.
+
+Two warnings, and they are the reason it says "untested" here and in the
+code. Nobody has run it: it was written from bubblewrap's documentation on a
+Mac, where bwrap cannot run at all, so what is checked is the command line it
+composes and not the fence itself. Because of that it is never a default: you
+answer `bwrap` at the prompt, or pass `--sandbox bwrap`, or say
+`sticky-chat sandbox --set bwrap` once — and after that it is remembered like
+any other answer. And it fences less than a container does:
+the network is shared, `/usr` and `/etc` are the host's and readable, the
+process is you with your uid, and anything bound writable — the project and
+the agent's home — is writable. Also, an agent installed *under* your home,
+which is where npm and Claude's own installer put it, is not inside a fence
+that replaces your home; sticky checks before opening or moving a tab and
+says so rather than leaving you a pane that died, and `--sandbox-arg` is how
+you bind it in.
+
+[bwrap]: https://github.com/containers/bubblewrap
+
+What a container does not do: it is not a defence against someone who has
+found a kernel bug, and it does not stop an agent sending what it can reach
+out over the network. It is a fence against the thing that actually happens
+— an agent that misreads an instruction and reads, rewrites or deletes the
+wrong tree.
+
+Two fences that need no sticky support, if you want them as well:
+`--permission-mode`, `--allowedTools` / `--disallowedTools`, or
+`permissions.allow` / `permissions.deny` in `~/.claude/settings.json`, which
+takes patterns like `Read(./secrets/**)` and `Bash(rm:*)`; and `--agent-cmd`,
+which takes a whole command line, so anything that ends by running the agent
+goes in front of it: `env`, `nice`, a VM's `ssh`, a container runner of your
+own.
 
 ## What survives what
 

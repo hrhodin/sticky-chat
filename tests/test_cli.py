@@ -929,6 +929,97 @@ class TestLearningTheIdTheAgentChose:
         return (f'{{"sessionId": "{session_id}", "projectHash": "11cc", '
                 f'"kind": "main"}}')
 
+    def continuation(self, home, folder, session, carrying, when):
+        """A transcript that carries on from another, as a resume writes it:
+        its own id in the header, and the records it copied over still
+        carrying the id they were written under."""
+        return self.transcript(
+            home, f"{folder}/{session}.jsonl", self.header(session),
+            f'{{"type": "user", "session_id": "{carrying}", "n": 1}}',
+            when=when)
+
+    def test_a_resumed_conversation_is_followed_to_where_it_went(
+            self, sticky, tmp_path):
+        """Claude Code's --resume does not write on at the end of the record
+        it was given: it copies what was said into a file of its own with a
+        new id. Every tab reopened once was reading, and would have resumed
+        from, a transcript that stopped the moment it was last restarted."""
+        home = tmp_path / "home"
+        folder = ".claude/projects/-p-thing"
+        self.transcript(home, f"{folder}/{self.ID}.jsonl",
+                        self.header(self.ID), when=self.LAUNCH)
+        self.continuation(home, folder, self.OTHER, self.ID,
+                          when=self.LAUNCH + 5)
+        assert sticky.continued_session(sticky.CLAUDE, "/p/thing", self.ID,
+                                        0.0, str(home)) == self.OTHER
+
+    def test_the_tab_next_door_is_not_adopted(self, sticky, tmp_path):
+        """Three tabs on one project write into one directory, so "the newest
+        transcript" would hand this tab the conversation beside it. Only a
+        file carrying *our* id is ours."""
+        home = tmp_path / "home"
+        folder = ".claude/projects/-p-thing"
+        self.transcript(home, f"{folder}/{self.ID}.jsonl",
+                        self.header(self.ID), when=self.LAUNCH)
+        self.continuation(home, folder, self.OTHER,
+                          "5f0e3b7a-1111-2222-3333-444455556666",
+                          when=self.LAUNCH + 9)
+        assert not sticky.continued_session(sticky.CLAUDE, "/p/thing",
+                                            self.ID, 0.0, str(home))
+
+    def test_a_conversation_nobody_resumed_carries_on_nowhere(
+            self, sticky, tmp_path):
+        home = tmp_path / "home"
+        self.transcript(home, f".claude/projects/-p-thing/{self.ID}.jsonl",
+                        self.header(self.ID), when=self.LAUNCH)
+        assert not sticky.continued_session(sticky.CLAUDE, "/p/thing",
+                                            self.ID, 0.0, str(home))
+
+    def test_the_one_made_when_this_tab_started_is_this_tab_s(
+            self, sticky, tmp_path):
+        """Resume the same conversation in two tabs and each has a
+        continuation carrying its id. The one that appeared as this tab
+        started is the one this tab is writing."""
+        home = tmp_path / "home"
+        folder = ".claude/projects/-p-thing"
+        older = "11111111-1111-4111-8111-111111111111"
+        mine = "22222222-2222-4222-8222-222222222222"
+        self.transcript(home, f"{folder}/{self.ID}.jsonl",
+                        self.header(self.ID), when=self.LAUNCH)
+        self.continuation(home, folder, older, self.ID, when=self.LAUNCH + 5)
+        self.continuation(home, folder, mine, self.ID, when=self.LAUNCH + 50)
+        assert sticky.continued_session(sticky.CLAUDE, "/p/thing", self.ID,
+                                        self.LAUNCH + 40, str(home)) == mine
+        assert sticky.continued_session(sticky.CLAUDE, "/p/thing", self.ID,
+                                        0.0, str(home)) == older, \
+            "and with no launch time to go on, the first one after it"
+
+    def test_a_profile_that_does_not_fork_is_not_asked(self, sticky,
+                                                       tmp_path):
+        """Gemini and codex write on at the end of the record they were
+        given, so there is nothing to follow."""
+        assert not sticky.continued_session(sticky.GEMINI, "/p/thing",
+                                            self.ID, 0.0, str(tmp_path))
+        assert not sticky.continued_session(sticky.SHELL, "/p/thing",
+                                            self.ID, 0.0, str(tmp_path))
+
+    def test_discovery_asks_the_right_question_per_profile(self, sticky,
+                                                           tmp_path):
+        """One entry point: the sidebar asks what the agent calls this
+        conversation and the profile decides what that means."""
+        home = tmp_path / "home"
+        folder = ".claude/projects/-p-thing"
+        self.transcript(home, f"{folder}/{self.ID}.jsonl",
+                        self.header(self.ID), when=self.LAUNCH)
+        self.continuation(home, folder, self.OTHER, self.ID,
+                          when=self.LAUNCH + 5)
+        assert sticky.discover_session(sticky.CLAUDE, 0.0, str(home),
+                                       project="/p/thing",
+                                       named=self.ID) == self.OTHER
+        assert not sticky.discover_session(sticky.CLAUDE, 0.0, str(home),
+                                           project="/p/thing"), \
+            "and with no id in hand there is nothing to follow"
+
     def test_the_newest_transcript_written_since_launch_says_the_id(
             self, sticky, tmp_path):
         home = tmp_path / "home"
@@ -1251,17 +1342,20 @@ class TestLearningTheIdTheAgentChose:
                                when=self.LAUNCH + 5)
         assert sticky.session_id_of(str(path)) == self.ID
 
-    def test_a_profile_with_no_glob_looks_at_nothing(self, sticky, tmp_path):
-        """Which is what keeps every Claude tab out of this code path: the
-        id was ours to choose, so there is nothing on disk to learn."""
+    def test_a_profile_with_no_glob_globs_for_nothing(self, sticky, tmp_path):
+        """Claude is asked what it calls the conversation, but never by
+        globbing: three tabs on one project write into one directory, so the
+        newest file there is as likely to be the tab next door. The question
+        it answers is the exact one - which of these carries our id - and with
+        no id in hand there is nothing to ask at all."""
         home = tmp_path / "home"
         self.transcript(home, f".claude/projects/-a-project/{self.ID}.jsonl",
                         self.header(self.ID), when=self.LAUNCH + 5)
-        assert not sticky.CLAUDE.can_discover and not sticky.GENERIC.can_discover
         assert sticky.CLAUDE.transcript_glob == ""
+        assert not sticky.GENERIC.can_discover, "it writes nothing down"
         assert (sticky.discover_session(sticky.CLAUDE, self.LAUNCH, str(home))
                 == "")
-        told = dataclasses.replace(sticky.CLAUDE,
+        told = dataclasses.replace(sticky.GENERIC, session_flag="--session-id",
                                    transcript_glob=".claude/**/*.jsonl")
         assert not told.can_discover, "an agent we name the conversation for"
 
@@ -1691,6 +1785,461 @@ class TestTheHooksAreHungOnce:
         assert len(self.mine(sticky, tm, "window-linked")) == 1
 
 
+class Pane:
+    """A tmux stand-in that remembers what it was told.
+
+    `carry_on` talks to exactly two things - the pane's option and its
+    keyboard - so the whole of what it does is visible in a list of calls.
+    """
+
+    def __init__(self):
+        self.calls = []
+
+    def ok(self, *words):
+        self.calls.append(words)
+
+    def typed(self):
+        """The words sent to the agent, in order."""
+        return [w[-1] for w in self.calls if w[:2] == ("send-keys", "-t")
+                or (len(w) > 3 and w[3] == "-l")]
+
+    def armed(self):
+        """What the pane's count says now: a number, or None if unset."""
+        for words in reversed(self.calls):
+            if "@sticky_autocontinue" in words:
+                return None if "-u" in words else words[-1]
+        return "untouched"
+
+
+class TestMiddleClickPastes:
+    """The X11 habit: mark something, middle-click, it appears. tmux binds
+    this itself and almost gets it right - its condition forwards the click
+    whenever the pane is in a mode, and sticky leaves the pane in copy mode
+    on purpose so what you selected stays lit. So the gesture meant to
+    follow a selection was the one a selection disabled."""
+
+    def config(self, sticky, tmp_path, monkeypatch):
+        monkeypatch.setenv("STICKY_HOME", str(tmp_path))
+        with open(sticky.write_config("/bin/sticky-chat"),
+                  encoding="utf-8") as fh:
+            return fh.read()
+
+    def rows(self, sticky, tmp_path, monkeypatch, table):
+        # By token, not by prefix: the table names are padded so the keys
+        # line up in the file, and `copy-mode` is a prefix of
+        # `copy-mode-vi`.
+        want = ["bind", "-T", table, "MouseDown2Pane"]
+        return [row for row in
+                self.config(sticky, tmp_path, monkeypatch).splitlines()
+                if row.split()[:4] == want]
+
+    def test_it_is_bound_where_a_selection_leaves_you(self, sticky, tmp_path,
+                                                      monkeypatch):
+        """Both copy-mode tables, because `mode-keys` follows your EDITOR
+        and the pane is in one of them after every drag."""
+        for table in ("copy-mode", "copy-mode-vi"):
+            rows = self.rows(sticky, tmp_path, monkeypatch, table)
+            assert len(rows) == 1, table
+            assert "paste-buffer -p" in rows[0]
+
+    def test_copy_mode_is_left_on_the_way_through(self, sticky, tmp_path,
+                                                   monkeypatch):
+        """Like a printable key typed while scrolled back: the paste belongs
+        at the prompt, which is where it lands."""
+        row = self.rows(sticky, tmp_path, monkeypatch, "copy-mode")[0]
+        assert row.index("cancel") < row.index("paste-buffer")
+
+    def test_a_pane_drawing_its_own_screen_still_gets_the_click(
+            self, sticky, tmp_path, monkeypatch):
+        """An agent with mouse reporting on has its own idea about button
+        two, and the wheel bindings make the same exception."""
+        row = self.rows(sticky, tmp_path, monkeypatch, "copy-mode")[0]
+        assert "#{||:#{alternate_on},#{mouse_any_flag}}" in row
+        assert "send-keys -M" in row
+
+    def test_the_sidebar_is_not_pasted_into(self, sticky, tmp_path,
+                                            monkeypatch):
+        """It reads every character as a command, which is how a batch of
+        notes once went into the wrong conversation."""
+        row = self.rows(sticky, tmp_path, monkeypatch, "root")[0]
+        assert "@sticky_role},sidebar" in row
+
+
+class TestSendingABatchToAnotherTab:
+    """`C-g 1`-`9` in the sidebar. It was a bare digit there, and a bare
+    digit in the sidebar is a trap: letters are forwarded to the agent so
+    you can start typing at the pane your eye is on, and a digit was
+    intercepted instead - pasting the whole pending batch into another
+    conversation with nothing asked and nothing said. Typing a message with
+    a `2` in it sent four notes into another tab."""
+
+    def test_a_digit_is_no_longer_the_sidebars_own_key(self, sticky):
+        for digit in "123456789":
+            assert digit not in sticky.SIDEBAR_KEYS, digit
+            assert sticky.typing_through(digit), \
+                "it goes to the agent, like any other character typed here"
+
+    def test_the_prefix_sends_from_the_sidebar(self, sticky):
+        line = next(row for row in
+                    sticky.send_to_tab_keys("/bin/sticky-chat").splitlines()
+                    if row.startswith("bind 4 "))
+        assert "@sticky_role},sidebar" in line
+        assert "commit --to-tab 4" in line
+
+    def test_and_still_selects_the_window_anywhere_else(self, sticky):
+        """The cost of taking `C-g <digit>` outright would have been a key
+        people use all day, to buy one they use now and then."""
+        for number in (1, 9):
+            line = next(row for row in
+                        sticky.send_to_tab_keys().splitlines()
+                        if row.startswith(f"bind {number} "))
+            assert line.rstrip().endswith(f"'select-window -t :={number}'")
+
+    def test_every_digit_is_bound_and_none_is_zero(self, sticky):
+        keys = sticky.send_to_tab_keys().splitlines()
+        assert [k.split()[1] for k in keys] == list("123456789")
+
+    def test_the_binary_is_not_left_as_a_marker(self, sticky, tmp_path,
+                                                monkeypatch):
+        """This text is spliced in after the template's own `@BIN@` has been
+        replaced, so a marker left here reaches the file unreplaced - and
+        nine bindings pointed at a program called `@BIN@`."""
+        monkeypatch.setenv("STICKY_HOME", str(tmp_path))
+        with open(sticky.write_config("/bin/sticky-chat"),
+                  encoding="utf-8") as fh:
+            text = fh.read()
+        assert "@BIN@" not in text
+        assert "bind 2 if -F" in text
+
+
+class TestTheOrderTabsComeBackIn:
+    """`resume` used to reopen a set in the order the tabs had last been
+    *touched*, because that is the order `known_windows` answers in - right
+    for a list you are choosing from, wrong for putting a set back. A
+    session came back shuffled, and the tab you reach for by its number was
+    somewhere else every time."""
+
+    def records(self, *pairs):
+        return [{"session": f"s{n}", "name": f"p{n}", "index": i,
+                 "created": 1000 + n, "last_seen": 2000 - n}
+                for n, i in pairs]
+
+    def test_it_is_the_order_they_sat_in(self, sticky):
+        shuffled = self.records((1, 4), (2, 3), (3, 2), (4, 1))
+        assert [r["name"] for r in sticky.in_tab_order(shuffled)] == \
+            ["p4", "p3", "p2", "p1"], "by index, whatever the timestamps say"
+
+    def test_a_record_from_before_this_was_written_down(self, sticky):
+        """Every record on the machine this was added to had no index. They
+        go after the ones that do, oldest first - the order they were made
+        in, which is the closest thing to where they were."""
+        knows = self.records((1, 2), (2, 1))
+        blind = [{"session": "old1", "name": "old1", "created": 10},
+                 {"session": "old2", "name": "old2", "created": 5}]
+        out = [r["name"] for r in sticky.in_tab_order([*knows, *blind])]
+        assert out == ["p2", "p1", "old2", "old1"], out
+
+    def test_nothing_is_lost_or_duplicated(self, sticky):
+        mixed = [*self.records((1, 3), (2, 1)),
+                 {"session": "x", "name": "x"}]
+        out = sticky.in_tab_order(mixed)
+        assert sorted(r["session"] for r in out) == ["s1", "s2", "x"]
+        assert len(out) == 3
+
+    def test_the_chooser_still_lists_newest_first(self, sticky, tmp_path,
+                                                  monkeypatch):
+        """`C-g o` is a list to pick from, where what you closed a moment
+        ago belongs at the top. Only the reopening of a *set* is in tab
+        order."""
+        monkeypatch.setattr(sticky.store, "STATE_HOME", str(tmp_path))
+        for n, seen in ((1, 100), (2, 300), (3, 200)):
+            sticky.record_window(f"s{n}", touch=False, name=f"p{n}",
+                                 index=n, last_seen=seen)
+        assert [r["name"] for r in sticky.known_windows()] == \
+            ["p2", "p3", "p1"]
+
+
+class TestCopyingWithCommandC:
+    """Command is not a modifier tmux can see - macOS terminals consume it -
+    so a terminal is configured to send Esc-c instead, which arrives as
+    `M-c`. Measured on tmux next-3.8: both `\\x1bc` and the kitty-protocol
+    form `\\x1b[99;9u` come through as M-c, and `user-keys` never sees
+    either, which is why there is no user-keys entry here."""
+
+    def config(self, sticky, tmp_path, monkeypatch):
+        monkeypatch.setenv("STICKY_HOME", str(tmp_path))
+        return open(sticky.write_config("/bin/sticky-chat"),
+                    encoding="utf-8").read()
+
+    def test_it_copies_in_both_copy_mode_tables(self, sticky, tmp_path,
+                                                monkeypatch):
+        text = self.config(sticky, tmp_path, monkeypatch)
+        # Whitespace-insensitive: the two bindings are padded so the key
+        # names line up in the file.
+        rows = [" ".join(row.split()) for row in text.splitlines()]
+        for table in ("copy-mode", "copy-mode-vi"):
+            assert f"bind -T {table} M-c send -X copy-pipe-no-clear" in \
+                " | ".join(rows), table
+
+    def root(self, sticky, tmp_path, monkeypatch):
+        return next(row for row in
+                    self.config(sticky, tmp_path, monkeypatch).splitlines()
+                    if row.startswith("bind -T root M-c"))
+
+    def test_the_note_prompt_gets_the_key_it_already_knows(self, sticky,
+                                                           tmp_path,
+                                                           monkeypatch):
+        """The prompt's copy key is C-c, so M-c is translated rather than
+        taught."""
+        line = self.root(sticky, tmp_path, monkeypatch)
+        assert "@sticky_role},note" in line and "send-keys C-c" in line
+
+    def test_anywhere_else_the_agent_still_gets_it(self, sticky, tmp_path,
+                                                   monkeypatch):
+        """Taking a key from the agent is a cost, and this one is avoidable:
+        the pane that is not a prompt and not the sidebar is handed M-c."""
+        line = self.root(sticky, tmp_path, monkeypatch)
+        assert "send-keys M-c" in line
+        assert "sidebar" in line, "and the sidebar is the one that is not"
+
+    def test_no_format_sits_inside_the_braces(self, sticky, tmp_path,
+                                              monkeypatch):
+        """The bug this binding shipped with, and the reason it did nothing.
+
+        tmux does not expand `#{...}` in a command's arguments inside a
+        braced list, so `send-keys -t "#{pane_id}" C-c` handed send-keys
+        those fifteen characters as a target, matched no pane, and failed
+        without a word: command-C in the note prompt did nothing at all. A
+        key binding's default target is already the pane the key arrived at,
+        so there is no `-t` to get wrong - and the bindings that really do
+        need a format put it in a quoted string, which is expanded, rather
+        than in braces.
+
+        An `if -F` condition inside braces *is* expanded, because that is
+        what `-F` asks for - which is why the else branch here works and the
+        target did not, and why this looks for a target rather than for a
+        format.
+        """
+        line = self.root(sticky, tmp_path, monkeypatch)
+        assert '-t "#{' not in line, \
+            "a format in a target inside braces is handed over literally"
+        assert " -t " not in line, \
+            "and there is no target to get wrong: the key's own pane is it"
+
+    def test_the_generated_config_holds_no_escape_byte(self, sticky, tmp_path,
+                                                       monkeypatch):
+        """The comment explains the terminal's side, and `\\x1b` in a
+        template that is not raw is an escape: it wrote a real Esc into the
+        file, inside a comment, where nothing would ever have noticed."""
+        assert "\x1b" not in self.config(sticky, tmp_path, monkeypatch)
+
+
+class TestWhichLinesGetLitWhileYouReadBack:
+    """A copy-mode search costs tmux the whole history and marks every match
+    in it - a second or four on a pane with two hundred thousand rows, with
+    the server blocked and every other pane with it. So what is asked for is
+    bounded twice over: only quotes that could land on the rows you are
+    reading, and only as many of them as the history can afford."""
+
+    def notes(self, **over):
+        """As a store really writes them: `created` is an ISO-8601 string.
+
+        It was a number in the first version of this test, which is why a
+        `float()` of it shipped and put a traceback in the pane on every
+        scroll. One of them is a number anyway, because a store old enough
+        may hold either and neither may raise.
+        """
+        made = []
+        for i in range(12):
+            made.append({"id": f"n{i}", "quote": f"a quoted line number {i}",
+                         "note": "x", "status": "pending",
+                         "created": f"2026-10-06T00:{i:02d}:24", **over})
+        made[4]["created"] = 1_760_000_000
+        return made
+
+    def test_a_quote_that_is_not_on_the_rows_is_not_searched_for(self,
+                                                                 sticky):
+        """The ordinary case, and the one that used to cost the most: a
+        pattern matching nothing is the most expensive search there is."""
+        near = "a quoted line number 3\nand some other output"
+        pattern = sticky.mark_pattern(self.notes(), near)
+        assert pattern == "a quoted line number 3"
+
+    def test_nothing_on_the_rows_asks_for_nothing(self, sticky):
+        assert sticky.mark_pattern(self.notes(), "unrelated output") == ""
+
+    def test_the_newest_come_first_and_the_sent_ones_last(self, sticky):
+        """What is worth lighting is what you are still working on."""
+        notes = self.notes()
+        notes[0]["status"] = "committed"      # oldest anyway
+        notes[11]["status"] = "committed"     # newest, but sent
+        near = "\n".join(n["quote"] for n in notes)
+        got = sticky.mark_pattern(notes, near, 3).split("|")
+        assert got == ["a quoted line number 10", "a quoted line number 9",
+                       "a quoted line number 8"], got
+
+    def test_a_time_it_cannot_read_is_not_a_traceback(self, sticky):
+        """Whatever is in the field, a scroll must not raise: the hook runs
+        on every copy-mode entry and tmux puts what it printed on the
+        screen."""
+        notes = self.notes()
+        notes[3]["created"] = "whenever"
+        notes[5]["created"] = None
+        del notes[7]["created"]
+        near = "\n".join(n["quote"] for n in notes)
+        assert sticky.mark_pattern(notes, near, 4).count("|") == 3
+
+    def test_the_count_is_capped(self, sticky):
+        near = "\n".join(n["quote"] for n in self.notes())
+        assert len(sticky.mark_pattern(self.notes(), near, 2).split("|")) == 2
+        assert len(sticky.mark_pattern(self.notes(), near, 1).split("|")) == 1
+        assert len(sticky.mark_pattern(self.notes(), near, 0).split("|")) == 1, \
+            "zero is one: a budget of none still lights the newest"
+
+    def test_how_many_a_history_affords(self, sticky):
+        """Eight quotes over sixty thousand rows measured at nearly a second
+        of frozen server, and one over the same rows at a quarter of it."""
+        def affords(rows):
+            budget, most = sticky.MARK_BUDGET, sticky.MARK_QUOTES
+            return (budget // rows if rows > budget // most else most)
+        assert affords(500) == sticky.MARK_QUOTES, "a short history, all of them"
+        assert affords(3000) == sticky.MARK_QUOTES
+        assert affords(60000) < sticky.MARK_QUOTES, "a long one, fewer"
+        assert affords(21367) >= affords(60000)
+        assert sticky.MARK_BUDGET < 194327, \
+            "and the longest go unlit rather than freezing the session"
+
+    def test_a_deleted_note_lights_nothing(self, sticky):
+        notes = self.notes()
+        for note in notes:
+            note["deleted"] = True
+        near = "\n".join(n["quote"] for n in notes)
+        assert sticky.mark_pattern(notes, near) == ""
+
+    def test_the_whole_store_still_works_without_a_screen(self, sticky):
+        """`within` empty means "do not know", not "nothing matches" - the
+        capture can fail, and a tab that lit nothing after a failed read
+        would look like a tab with no notes."""
+        assert sticky.mark_pattern(self.notes()).count("|") == \
+            sticky.MARK_QUOTES - 1
+
+
+class TestStoppingWhatATabIsRunning:
+    """`C-g k`. It goes by parentage rather than by process group, because
+    the runaway that prompted it sat in a group of its own and never heard
+    the terminal's Ctrl-C."""
+
+    def test_it_finds_a_child_and_a_grandchild(self, sticky):
+        """Deepest first, so a parent cannot be told its child has gone and
+        start another one."""
+        deep = subprocess.Popen(
+            [sys.executable, "-c",
+             "import subprocess, sys; "
+             "subprocess.run([sys.executable, '-c', 'import time;"
+             "time.sleep(30)'])"])
+        try:
+            for _ in range(40):
+                found = sticky.running_under(os.getpid())
+                if len(found) >= 2:
+                    break
+                time.sleep(0.1)
+            pids = [pid for pid, _ in found]
+            assert deep.pid in pids, "the child"
+            assert len(pids) >= 2, f"and its own child: {found}"
+            assert pids.index(deep.pid) > 0, "the parent comes last"
+        finally:
+            deep.kill()
+            deep.wait()
+
+    def test_the_pane_s_own_process_is_never_in_the_list(self, sticky):
+        """Killing that is killing the tab, which tmux has its own key
+        for."""
+        assert os.getpid() not in [pid for pid, _
+                                   in sticky.running_under(os.getpid())]
+
+    def test_it_knows_which_processes_are_itself(self, sticky):
+        """Run from inside the pane it is about to signal - your own shell,
+        or the agent's - it is a descendant of that very tree, and without
+        this it kills itself halfway through."""
+        mine = sticky.ours(os.getpid())
+        assert os.getpid() in mine
+        assert os.getppid() in mine, "and what it hangs off"
+        assert 1 not in mine, "stopping short of init"
+
+
+class TestCarryingATabOn:
+    """`C-g a`. The clock below waits out a limit nobody chose; this is a
+    standing instruction to say the same word when a turn ends of its own
+    accord, and the whole difficulty is telling a turn of work apart from a
+    word echoed back by something that has stopped listening."""
+
+    def test_it_says_the_word_and_counts_down(self, sticky):
+        pane = Pane()
+        left, saw, said = sticky.carry_on(pane, "%1", 5, "a screen", "")
+        assert left == 4 and saw == "a screen"
+        assert pane.typed() == [sticky.CONTINUE_WORD, "Enter"]
+        assert pane.armed() == "4"
+        assert "4 left" in said
+
+    def test_the_last_of_an_arm_takes_the_count_off_the_pane(self, sticky):
+        """Nothing left to say is nothing to remember, and a count of zero
+        sitting on a pane reads as armed to anybody looking at it."""
+        pane = Pane()
+        left, _, _ = sticky.carry_on(pane, "%1", 1, "a screen", "")
+        assert left == 0 and pane.armed() is None
+
+    def test_without_end_stays_without_end(self, sticky):
+        pane = Pane()
+        left, _, said = sticky.carry_on(pane, "%1", sticky.AUTO_FOREVER,
+                                        "a screen", "before")
+        assert left == sticky.AUTO_FOREVER
+        assert pane.armed() == str(sticky.AUTO_FOREVER)
+        assert "without end" in said
+
+    def test_a_screen_that_did_not_move_spends_the_arm(self, sticky):
+        """An agent whose window redraws to exactly what it was did nothing
+        with the word, and an arm that cannot tell would type into it every
+        few seconds for as long as the count allows."""
+        pane = Pane()
+        left, saw, said = sticky.carry_on(pane, "%1", sticky.AUTO_FOREVER,
+                                          "same", "same")
+        assert left == 0 and saw == ""
+        assert not pane.typed(), "and nothing was sent"
+        assert pane.armed() is None, "off the pane, not just out of the loop"
+        assert "achieved nothing" in said
+
+    def test_a_turn_that_did_no_work_spends_it_too(self, sticky):
+        """The other half, and the one the screen cannot catch: an agent that
+        only echoes the word has a screen that *has* changed - by the width
+        of the word - and gives itself away by stopping a fifth of a second
+        later."""
+        pane = Pane()
+        left, _, said = sticky.carry_on(pane, "%1", 3, "new", "old",
+                                        worked=False)
+        assert left == 0 and pane.armed() is None
+        assert not pane.typed()
+        assert "achieved nothing" in said
+
+    def test_the_first_stop_is_never_judged(self, sticky):
+        """It is somebody's own turn ending, and there is nothing of ours to
+        compare it with."""
+        pane = Pane()
+        left, _, _ = sticky.carry_on(pane, "%1", 2, "a screen", "",
+                                     worked=False)
+        assert left == 1 and pane.typed()[:1] == [sticky.CONTINUE_WORD]
+
+    def test_what_the_rows_say(self, sticky):
+        assert sticky.auto_line(0) == ""
+        assert "5 more times" in sticky.auto_line(5)
+        assert "1 more time" in sticky.auto_line(1)
+        assert "until you say otherwise" in sticky.auto_line(
+            sticky.AUTO_FOREVER)
+        assert "\u21ba5" in sticky.footer_text([], auto=5)
+        assert "\u21ba\u221e" in sticky.footer_text([],
+                                                  auto=sticky.AUTO_FOREVER)
+        assert "\u21ba" not in sticky.footer_text([]), "and nothing when unarmed"
+
+
 class TestATabThatSetsItsOwnClock:
     """An agent that runs out of turns says when it will have them back, and
     a tab can wait for that and send one word. What it must not do is take
@@ -1787,19 +2336,12 @@ class TestATabThatSetsItsOwnClock:
         conversation that is already talking."""
         home = self.transcript(tmp_path, self.notice(self.PLAIN))
         args = (sticky.CLAUDE, "/tmp/proj", "abc")
-        # the transcript is what a profile that keeps one is asked
-        import sticky_chat.sidebar as sb
-        keep = sb.limit_notice
-        sb.limit_notice = lambda a, p, s, home=home: sticky.limit_notice(
-            a, p, s, home=home)
-        try:
-            assert sb.still_limited(*args, "", "")
-            home2 = self.transcript(tmp_path / "gone", self.message(self.PROSE))
-            sb.limit_notice = lambda a, p, s: sticky.limit_notice(
-                a, p, s, home=home2)
-            assert not sb.still_limited(*args, "", "")
-        finally:
-            sb.limit_notice = keep
+        # The home is passed in rather than assumed, which is also what a
+        # tab in a container does: its agent writes the transcript into a
+        # directory of ours, and the reading is the same reading.
+        assert sticky.still_limited(*args, "", "", home)
+        gone = self.transcript(tmp_path / "gone", self.message(self.PROSE))
+        assert not sticky.still_limited(*args, "", "", gone)
 
     def test_a_screen_agent_is_asked_of_its_screen(self, sticky):
         """Codex keeps no record, so the row that armed the clock has to
@@ -1851,7 +2393,13 @@ class TestTheLastRunOfTabs:
             return ""
 
     def remember(self, sticky, home, monkeypatch, *ages):
-        """One record per age, in seconds before now. Newest first."""
+        """One record per age, in seconds before now. Newest first.
+
+        Numbered left to right as well, because that is what a real record
+        carries and what a set is put back in: `tab-0` is the newest here
+        *and* the leftmost, which is the one combination the stamps alone
+        cannot tell you.
+        """
         monkeypatch.setattr(sticky.store, "STATE_HOME", str(home))
         now = time.time()
         for number, age in enumerate(ages):
@@ -1859,7 +2407,7 @@ class TestTheLastRunOfTabs:
                 f"tab-{number}", touch=False, project=str(home),
                 name=f"tab-{number}", agent="claude",
                 command=f"claude --session-id tab-{number}",
-                last_seen=now - age)
+                index=number + 1, last_seen=now - age)
         return [f"tab-{number}" for number in range(len(ages))]
 
     def test_the_tabs_that_stopped_together_are_the_run(

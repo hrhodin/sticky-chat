@@ -51,6 +51,13 @@ STATUS_COLOR = {
 }
 
 
+# Where everything sticky keeps lives: the notes, the window records, the
+# sandbox. Here rather than in `store`, because the sandbox is built before
+# anything is stored and importing the store to find a directory would put a
+# cycle where there is only a path.
+STATE_HOME = os.path.expanduser(os.environ.get("STICKY_HOME", "~/.sticky"))
+
+
 # ------------------------------------------------------------------- helpers
 
 

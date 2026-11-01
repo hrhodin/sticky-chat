@@ -15,6 +15,7 @@ import time
 import uuid
 
 from .agents import (
+    AGENTS,
     CLAUDE,
     DEFAULT_AGENT,
     Agent,
@@ -22,6 +23,7 @@ from .agents import (
     installed_agents,
     known_name,
     require_agent,
+    unix_time,
 )
 from .clipboard import to_clipboard
 from .config import (
@@ -46,10 +48,42 @@ from .placement import (
     parse_view,
     placements,
 )
+from .sandbox import (
+    BWRAP,
+    DEFAULT_IMAGE,
+    FENCE_NOTES,
+    FENCES,
+    OFF,
+    agent_home,
+    build_image,
+    carry_history,
+    default_fence,
+    dockerfile_path,
+    engine_named,
+    ensure_image,
+    fence_choices,
+    fence_named,
+    fenced_by,
+    home_of,
+    image_built,
+    inner_command,
+    make_home,
+    refence,
+    rejoin,
+    remember,
+    remembered,
+    runs_in_image,
+    split_command,
+    unavailable,
+    unreachable,
+    warm_up,
+)
+from .sidebar import AUTO_FOREVER, AUTO_STEP
 from .store import (
     Store,
     agent_of,
     claude_pane,
+    in_tab_order,
     known_windows,
     last_run,
     launched_as,
@@ -87,6 +121,7 @@ from .util import (
     truncate,
     visible,
     when_to_send,
+    wrap,
 )
 
 
@@ -296,7 +331,8 @@ def cmd_note(args) -> int:
 
     width = terminal_width()
     title = "Edit note" if args.edit else "Sticky note"
-    hint = "Enter saves \u00b7 C-s sends \u00b7 alt-enter sends and enters"
+    hint = ("Enter saves \u00b7 C-s sends \u00b7 alt-enter sends and enters"
+            "\u00b7 C-c copies")
     print(f"{BOLD}{title}{RESET}  {DIM}{hint}{RESET}\n")
     for row in note["quote"].split("\n")[:8]:
         print(f"  {DIM}{truncate(row, width - 4)}{RESET}")
@@ -776,6 +812,21 @@ def open_sidebar(tm: Tmux, binary: str, left: str, project: str,
     return right
 
 
+def tab_index(tm: Tmux, pane: str) -> int | None:
+    """Which tab a pane is in, as a number, or None if it cannot be asked.
+
+    Recorded so that a set of tabs put back by `resume` comes back in the
+    order it sat in rather than the order it was last touched. A number
+    rather than a name: two tabs on one project have the same name, and the
+    number is also what you press in the sidebar to send notes to it.
+    """
+    try:
+        said = tm.fmt(pane, "#{window_index}").strip()
+    except RuntimeError:
+        return None
+    return int(said) if said.isdigit() else None
+
+
 def mark_launch(tm: Tmux, pane: str, agent: Agent, launched: float,
                 known: str = "") -> None:
     """Tell the pane when it started, so its id can be found later.
@@ -883,6 +934,7 @@ def cmd_fork(args) -> int:
     tm.set_option(left, "@sticky_agent_cmd",
                   with_words(base, [agent.session_flag, session], agent)
                   if session else base)
+    tm.set_option(left, "@sticky_home", home_of(base))
     tm.set_option(left, "@sticky_session", key)
     tm.set_option(left, "@sticky_agent", agent.name)
     # On the window, not the pane: the status line resolves a format
@@ -918,7 +970,7 @@ def cmd_fork(args) -> int:
                   command=command if session else base, store=fork_dir,
                   continued=not session,
                   width=int(width), virtual_rows=virtual, agent=agent.name,
-                  name=f"{name}-fork")
+                  name=f"{name}-fork", index=tab_index(tm, left))
 
     window = tm.fmt(left, "#{session_name}:#{window_index}")
     if virtual:
@@ -1139,7 +1191,11 @@ def resume_command(record: dict, agent: Agent | None = None) -> str:
         # twice.
         naming = {agent.session_flag} if agent.session_flag else set()
         naming |= set(agent.resume_flags)
-        words, out = command.split(), []
+        # The agent's own half of the line: a sandboxed tab comes back
+        # sandboxed, because what fences it is kept and only what it runs is
+        # rewritten.
+        fence, inside = split_command(command)
+        words, out = inside.split(), []
         skip = False
         for word in words:
             if skip:
@@ -1151,7 +1207,8 @@ def resume_command(record: dict, agent: Agent | None = None) -> str:
             if word in agent.bare_session_flags:
                 continue                # the fork already happened
             out.append(word)
-        return with_words(" ".join(out), [agent.resume_flags[0], named], agent)
+        return with_words(rejoin(fence, " ".join(out)),
+                          [agent.resume_flags[0], named], agent)
     if agent.continue_flags and not names_a_session(command, agent):
         # No id to ask for: the agent named its own conversation and nothing
         # ever learned what it called it. Asking for the last conversation in
@@ -1175,6 +1232,7 @@ def open_tab(tm: Tmux, record: dict, command: str, client: str | None) -> str:
     agent = agent_named(record.get("agent"))
     env = pane_env(agent)
     launch = prime_rows(command, virtual) if virtual else command
+    make_home(command)                  # a tab put back is fenced as it was
     # Before the pane, so that a transcript the agent opens a moment later is
     # newer than this and one written yesterday is not.
     launched = time.time()
@@ -1200,6 +1258,7 @@ def open_tab(tm: Tmux, record: dict, command: str, client: str | None) -> str:
     install_hooks(tm)                   # this may be a server we just started
     width = int(record.get("width") or DEFAULT_SIDEBAR_WIDTH)
     tm.set_option(left, "@sticky_agent_cmd", command)
+    tm.set_option(left, "@sticky_home", home_of(command))
     tm.set_option(left, "@sticky_session", record.get("session", ""))
     tm.set_option(left, "@sticky_agent", agent.name)      # before the sidebar
     # On the window, not the pane: the status line resolves a format
@@ -1213,7 +1272,8 @@ def open_tab(tm: Tmux, record: dict, command: str, client: str | None) -> str:
     if virtual:
         virtual_window(tm, tm.fmt(left, "#{session_name}:#{window_index}"),
                        virtual)
-    record_window(record.get("session", ""), project=project)
+    record_window(record.get("session", ""), project=project,
+                  index=tab_index(tm, left))
     return left
 
 
@@ -1413,7 +1473,10 @@ def cmd_resume(args) -> int:
               "a reopens all the rest \u00b7 q stops here")
 
     opened = 0
-    for record in wanted:
+    # In the order they sat, not the order they were last touched. `wanted`
+    # comes newest-first, which is right for the list above and wrong for
+    # the reopening: it is what had a session coming back shuffled.
+    for record in in_tab_order(wanted):
         project = record.get("project", "?")
         if not take_all:
             seen = time.strftime("%d %b", time.localtime(
@@ -1661,11 +1724,19 @@ def cmd_reopen(args) -> int:
 # fortieth character.
 MARK_QUOTES = 8
 
+# The most alternative-times-lines of searching a scroll may cost, which is
+# how the number of quotes is decided on a pane with a long history: eight
+# quotes over two hundred thousand rows is seconds of a frozen server, and
+# one quote over the same rows is a fifth of that. A tab with little history
+# still gets all eight.
+MARK_BUDGET = 120_000
+
 
 MARK_CHARS = 40
 
 
-def mark_pattern(notes: list[dict]) -> str:
+def mark_pattern(notes: list[dict], within: str = "",
+                 limit: int = MARK_QUOTES) -> str:
     """One regular expression matching every line that has a note on it.
 
     tmux's copy-mode search takes an extended regular expression and paints
@@ -1673,10 +1744,35 @@ def mark_pattern(notes: list[dict]) -> str:
     one alternation. What is matched is the row as it was captured rather
     than the quote as it was stored: the quote is what you selected, which
     may be half a line, and a half-line highlight reads as a mistake.
+
+    Only the notes still open, newest first, and only the ones whose text is
+    on `within` - the lines you can see. Everything else is in the sidebar's
+    band, which is where a list of notes belongs.
+
+    The number of alternatives is the price. tmux scans the *whole* history
+    for a search and marks every match in it, which on a pane holding two
+    hundred thousand lines takes seconds inside the server - and the server
+    is where every other pane is drawn from. Measured at sixty thousand
+    lines: a quarter of a second for one alternative, nearly a second for
+    eight, four when the machine is busy. So a quote that is not in front of
+    you is never searched for, which in the ordinary case means no search at
+    all - and a pattern matching nothing is the most expensive search there
+    is.
     """
+    def newest(note: dict) -> float:
+        # Through `unix_time`, which never raises and takes a number or an
+        # ISO-8601 string either way. A store writes `created` as
+        # `2026-10-06T00:00:24` and a `float()` of that put a traceback in
+        # the pane on every single scroll - the one shape the tests had not
+        # used, because they wrote the field as a number.
+        return -unix_time(note.get("created"))
+
     seen, out = set(), []
-    for note in notes:
-        if note.get("deleted"):
+    for note in sorted(notes, key=newest):
+        if note.get("deleted") or note.get("status") == "committed":
+            # The ones still open. A note already sent is a note you have
+            # dealt with, and lighting it costs the same as lighting one you
+            # have not.
             continue
         rows = note.get("rows") or [note.get("quote", "")]
         line = (rows[0] or "").strip()[:MARK_CHARS]
@@ -1684,9 +1780,11 @@ def mark_pattern(notes: list[dict]) -> str:
             # Two words are matched all over a pane and light up rows that
             # nobody annotated, which is worse than lighting up none.
             continue
+        if within and line not in within:
+            continue                    # nothing it could light is on screen
         seen.add(line)
         out.append(re.sub(r"([.\[\]()*+?{}|^$\\])", r"\\\1", line))
-        if len(out) >= MARK_QUOTES:
+        if len(out) >= max(1, limit):
             break
     return "|".join(out)
 
@@ -1709,12 +1807,15 @@ def cmd_marks(args) -> int:
     # are - because everything below has to put those two back.
     try:
         state = tm.fmt(pane, "#{pane_in_mode}\t#{selection_present}"
-                             "\t#{scroll_position}\t#{copy_cursor_y}")
+                             "\t#{scroll_position}\t#{copy_cursor_y}"
+                             "\t#{history_size}\t#{pane_height}")
     except RuntimeError:
         return 0
     mode, _, rest = state.partition("\t")
     selecting, _, rest = rest.partition("\t")
-    scrolled, _, cursor = rest.partition("\t")
+    scrolled, _, rest = rest.partition("\t")
+    cursor, _, deep = rest.partition("\t")
+    deep, _, tall = deep.partition("\t")
     if mode.strip() != "1":
         return 0                        # not reading back: nothing to paint
     if selecting.strip() == "1":
@@ -1727,7 +1828,36 @@ def cmd_marks(args) -> int:
         return 0
     project = resolve_project(tm, pane, args.project)
     store = open_store(tm, pane, project, getattr(args, "store", None))
-    pattern = mark_pattern(store.load())
+    # The rows a mark could possibly land on, in one capture, before tmux is
+    # asked to search for anything. This is the whole of the fix for a
+    # scroll that froze the session: a search costs the entire history and
+    # marks every match in it, so the question worth answering first is
+    # whether there is anything to find - and for notes taken further back
+    # than you are reading, there is not.
+    rows = int(deep) if deep.strip().isdigit() else 0
+    if rows > MARK_BUDGET:
+        # Further than the lighting is worth. One alternative over two
+        # hundred thousand rows is still most of a second with the server
+        # blocked, and the server is where every other pane is drawn from -
+        # so a tab that has printed that much goes unlit, and its notes are
+        # in the sidebar where the list of them belongs.
+        return 0
+    # The lines you are looking at, and nothing else. One capture of one
+    # screen, taken where the scroll has you rather than where the pane is
+    # live: reading back ten thousand rows, what is worth lighting is the
+    # ten thousandth, not the last. A quote that is not in here is not
+    # searched for, which is what stops a scroll freezing the session.
+    try:
+        back = int(scrolled) if scrolled.strip().isdigit() else 0
+        high = int(tall) - 1 if tall.strip().isdigit() else 0
+        near = "\n".join(tm.capture(pane, -back, high - back, joined=True))
+    except RuntimeError:
+        near = ""
+    # And how many to ask for, which is the price of the search: a pane with
+    # a short history can afford all of them, one with a long one cannot.
+    pattern = mark_pattern(store.load(), near,
+                           MARK_BUDGET // rows if rows > MARK_BUDGET // MARK_QUOTES
+                           else MARK_QUOTES)
     if not pattern:
         return 0
 
@@ -1874,8 +2004,8 @@ def cmd_restore(args) -> int:
 
 
 def ask_project(tm: Tmux, source: str | None,
-                given: str | None) -> tuple[str, str]:
-    """Ask what a new tab is for, and what should be running in it.
+                given: str | None) -> tuple[str, str, str]:
+    """Ask what a new tab is for, what runs in it, and what fences it.
 
     tmux's own command-prompt cannot complete a filename, so a path with one
     letter wrong came back as a failed run-shell somewhere off screen, and no
@@ -1891,6 +2021,14 @@ def ask_project(tm: Tmux, source: str | None,
     machine does not have is a tab that exits as it opens. `shell` is in the
     list, which is what retired the separate key for it.
 
+    The third line is how much of your disk that agent can reach, and it is
+    here rather than in a flag because it is a per-tab decision: a container
+    for the repository you are letting an agent loose in, nothing for the
+    one you are reading through together. It opens on the answer you gave
+    last time, or - until you have given one - on the fence in the tab you
+    pressed the key in, and what you pick is written down as the next tab's
+    default.
+
     An empty project means it was cancelled.
     """
     start = given or ""
@@ -1901,6 +2039,11 @@ def ask_project(tm: Tmux, source: str | None,
             start = ""
     print(f"{BOLD}New tab{RESET}  {DIM}Tab completes \u00b7 Enter opens "
           f"\u00b7 Esc cancels{RESET}\n")
+    # Started here and asked about below: finding out whether this machine
+    # can run a container is a round trip to a daemon, and a prompt that
+    # stops for it loses what you typed into the stop. By the time the third
+    # question is reached the answer is in.
+    warm_up()
     text = start or os.getcwd()
     while True:
         outcome, typed = prompt_line("project> ", text,
@@ -1937,8 +2080,73 @@ def ask_project(tm: Tmux, source: str | None,
         want = typed.strip() or here
         name = known_name(want)
         if name:
-            return path, name
+            break
         print(f"{DIM}no such agent: {want}{RESET}\n")
+
+    # What the agent may reach. The answer you gave last time wins, because
+    # it is an answer rather than an inference - and unlike the agent line,
+    # which follows the tab it was pressed in, this one is a standing
+    # preference about your own machine. Until there is one, the fence on
+    # the tab this was opened from, and failing that the strongest fence
+    # this machine can run.
+    was = fenced_by(launched_as(tm, claude_pane(tm, source) or source,
+                                agent_named(name))) if source else ""
+    fence = remembered() or was or default_fence()
+    fences = {choice.name: unavailable(choice) for choice in FENCES}
+    # Only the ones that can be had, each saying what the agent could reach
+    # from inside it - the question being asked. A fence this machine cannot
+    # run is left out rather than listed with its excuse: a row you cannot
+    # choose is a row to read past, and on a Mac that made the list longer
+    # than the choice. Typing its name still answers why, which is where
+    # that belongs. Aligned rather than run together, because options read at
+    # the moment of answering are a thing to compare, not prose, and wrapped
+    # to the pane because the prompt is a floating pane two thirds of a
+    # window wide rather than a terminal.
+    print()
+    room = max(32, terminal_width() - 2)
+    for choice in FENCES:
+        if fences[choice.name]:
+            continue
+        rows = wrap(choice.blurb, room - 11, 3) or [choice.blurb]
+        print(f"{DIM}  {choice.name:<8} {rows[0]}{RESET}")
+        for more in rows[1:]:
+            print(f"{DIM}  {'':<8} {more}{RESET}")
+    # The same lines whatever this machine can run, because they are about
+    # what a fence is rather than about the machine - and the one people are
+    # caught by is the middle one: "nothing else of yours" includes the share
+    # you had mounted.
+    for note in FENCE_NOTES:
+        for n, line in enumerate(wrap(note, room - 4, 3)):
+            print(f"{DIM}  {' ' if n else chr(0x2022)} {line}{RESET}")
+
+    def complete_fence(word: str) -> tuple[str, list[str]]:
+        # Completes what is listed. A fence that cannot be had is still
+        # accepted if you type it out, and answered with the reason.
+        fits = [f.name for f in FENCES if f.name.startswith(word.lower())
+                and not fences[f.name]]
+        if not fits:
+            return word, []
+        return os.path.commonprefix(fits), fits
+
+    while True:
+        outcome, typed = prompt_line("sandbox> ", fence,
+                                     complete=complete_fence)
+        if outcome != "save":
+            return "", "", ""
+        fence = typed.strip() or default_fence()
+        chosen = fence_named(fence)
+        if not chosen:
+            print(f"{DIM}no such sandbox: {fence}{RESET}\n")
+            continue
+        why = fences[chosen.name]
+        if why:
+            # Said here, where there is a line to correct it on. Said later
+            # it is a tab that did not open and a message in a pane that is
+            # already closing.
+            print(f"{DIM}{chosen.name}: {why}{RESET}\n")
+            continue
+        remember(chosen.name)
+        return path, name, chosen.name
 
 
 def open_project_prompt(tm: Tmux, binary: str, args) -> int:
@@ -1969,6 +2177,12 @@ def open_project_prompt(tm: Tmux, binary: str, args) -> int:
         command += ["--agent", args.agent]
     if getattr(args, "agent_cmd", None):
         command += ["--agent-cmd", args.agent_cmd]
+    if getattr(args, "sandbox", None):
+        command += ["--sandbox", args.sandbox]
+    if getattr(args, "sandbox_image", None):
+        command += ["--sandbox-image", args.sandbox_image]
+    for word in getattr(args, "sandbox_arg", None) or []:
+        command += ["--sandbox-arg", word]
     if args.dir:
         command.append(args.dir)
 
@@ -2021,16 +2235,713 @@ def cmd_sweep(args) -> int:
     return 0
 
 
+def fence_tab(command: str, project: str, agent: Agent, args,
+              inherited: bool = False) -> str:
+    """The command a tab really runs: `command`, with a fence around it.
+
+    Which fence is three answers in order of how explicit they are. `--sandbox`
+    said it, and that is the end of it - including `--sandbox off`, which is
+    how you get a tab on the host beside a tab in a container. A tab opened
+    beside another one keeps what that one had, because "another tab like
+    this" means like this one; so does a command line you named yourself,
+    which is the one case where we have no idea what the words mean. With
+    none of those, the answer given last time - and on a machine that has
+    never been asked, a container if this machine can run one.
+
+    A fence that was asked for and cannot be had stops the tab. A fence
+    nobody asked for and cannot be had steps aside and says so: the default
+    is a preference, and a preference should not be able to make
+    `sticky-chat start` fail on a laptop where docker happens to be down.
+
+    "Cannot be had" includes a fence that would open on a command that is
+    not in it. The namespace fence replaces your home, and an agent
+    installed under your home is then not there: the pane's command would
+    fail, and a pane whose command fails is a window and a sidebar gone
+    before you have read why. Asked here instead, where there is still a
+    tab to keep.
+    """
+    asked = (getattr(args, "sandbox", "") or "").strip()
+    if asked:
+        fence = fence_named(asked)
+        if not fence:
+            die(f"no such sandbox: {asked} (one of {fence_choices()})")
+    elif inherited or getattr(args, "agent_cmd", None):
+        return command
+    else:
+        fence = fence_named(default_fence())
+    if not fence or not fence.needs:
+        return refence(command, fence, project, agent) if fence else command
+    why = unavailable(fence)
+    extra = list(getattr(args, "sandbox_arg", None) or [])
+    if not why:
+        why = unreachable(fence, command, project, extra)
+    if why and not asked:
+        print(f"sticky: no {fence.name} sandbox for this tab: {why}",
+              file=sys.stderr)
+        return refence(command, fence_named("off"), project, agent)
+    if why:
+        die(f"--sandbox {fence.name}: {why}")
+    if not fence.tested:
+        # The same notice an unproven agent profile gets, for the same
+        # reason and in the same place: the tab that is about to run it is
+        # where somebody is looking.
+        print(f"sticky: the {fence.name} sandbox is not proven yet - "
+              f"{fence.caveat}.", file=sys.stderr)
+    image = (getattr(args, "sandbox_image", "") or DEFAULT_IMAGE)
+    if fence.uses_image:
+        # Only a fence that runs one. There is nothing to build for a
+        # namespace, and a first tab that went away for three minutes to
+        # build an image it would never run would be hard to forgive.
+        problem = ensure_image(image, fence.cli)
+        if problem:
+            die(problem)
+    return refence(command, fence, project, agent, image, extra)
+
+
+# How long to wait for a container to go before respawning the pane over it,
+# and how long the polite signal gets before the one tmux itself would send.
+DRAIN_WAIT = 6.0
+DRAIN_FIRST = 2.0
+
+
+def parent_of(pid: int) -> int:
+    """The process that started this one. Zero if it cannot be asked.
+
+    Through `ps`, because macOS has no `/proc` - and this is asked a handful
+    of times on one path, not in a loop.
+    """
+    try:
+        done = subprocess.run(["ps", "-o", "ppid=", "-p", str(pid)],
+                              capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        return 0
+    said = done.stdout.strip()
+    return int(said) if said.isdigit() else 0
+
+
+def inside_pane(tm: Tmux, pane: str) -> bool:
+    """Whether we are running in the pane we are about to restart.
+
+    The one thing a tab cannot do is move itself: restarting the pane kills
+    everything in it, this process included, halfway through - which left a
+    tab running in a container that sticky believed was on the host, unable
+    to be told apart from one that had never moved. Asked of the process
+    tree rather than of `TMUX_PANE`, which a key binding sets to the pane it
+    was pressed in and would refuse the one caller that is safe.
+    """
+    try:
+        target = int(tm.fmt(pane, "#{pane_pid}") or 0)
+    except (RuntimeError, ValueError):
+        return False
+    if target <= 1:
+        return False
+    pid = os.getpid()
+    for _ in range(64):                 # a tree, not a cycle; but be sure
+        if pid == target:
+            return True
+        pid = parent_of(pid)
+        if pid <= 1:
+            return False
+    return False
+
+
+def hand_over(tm: Tmux, pane: str, args, want) -> int:
+    """Have tmux do the move, because we are standing in the pane.
+
+    The same thing `C-g B` does: the server runs it, so the process keeping
+    the books is not the one being killed. Everything that was said on the
+    command line is said again, including which client to talk to - found
+    here if it was not given, so that the message still lands on a screen.
+    """
+    client = args.client or ""
+    if not client:
+        try:
+            client = (tm.run("list-clients", "-F", "#{client_name}")
+                      .splitlines() or [""])[0].strip()
+        except RuntimeError:
+            client = ""
+    again = [self_path(), "refence", "--sandbox", want.name,
+             "--socket", tm.socket, "--pane", pane]
+    if client:
+        again += ["--client", client]
+    if getattr(args, "anyway", False):
+        again.append("--anyway")
+    if getattr(args, "sandbox_image", None):
+        again += ["--sandbox-image", args.sandbox_image]
+    for word in getattr(args, "sandbox_arg", None) or []:
+        again += ["--sandbox-arg", word]
+    if getattr(args, "project", None):
+        again += ["--project", args.project]
+    tm.ok("run-shell", "-b", " ".join(shell_quote(word) for word in again))
+    return 0
+
+
+def drain(tm: Tmux, pane: str) -> bool:
+    """Stop what a pane is running, politely, and wait for it to be gone.
+
+    For one thing only: the pane of a boxed tab runs a container client, and a
+    client asked to stop forwards that to the container while a client killed
+    outright leaves it running. So the pane is told to hold its place first -
+    without `remain-on-exit` the pane would close the moment its command
+    exits, taking the tab with it before there is anything to put back.
+
+    Nothing in here names an engine, and nothing needs to: it signals the
+    pane's own process, and docker's client and podman's both pass a signal on
+    to what they are attached to. That was checked rather than assumed, by
+    unboxing a podman tab and finding the container gone with it.
+
+    True if it went. False if it is still there after `DRAIN_WAIT`, and the
+    caller respawns over it anyway: a stuck container is worth one `rm` of
+    yours, not a tab that refuses to move.
+
+    The namespace fence needs none of this and is not harmed by it. Its pane
+    process *is* the sandbox, and `--die-with-parent` means the pid namespace
+    goes when bwrap does - including under the SIGKILL `respawn-pane -k`
+    would have sent anyway, which is the one signal a docker client does not
+    survive usefully. So the conclusion for bwrap is that a signal here is
+    enough and nothing is ever left running. What it is not is graceful: the
+    signal goes to the pane's pid, which is bwrap, and the agent is a child
+    in a pid namespace of its own, so what reaches the agent is the kernel's
+    SIGKILL a step later rather than our SIGTERM. The conversation is copied
+    before any of this starts, so what that can cost is the turn in flight -
+    which a respawn interrupts either way.
+    """
+    tm.ok("set-option", "-p", "-t", pane, "remain-on-exit", "on")
+    try:
+        pid = int(tm.fmt(pane, "#{pane_pid}") or 0)
+    except (RuntimeError, ValueError):
+        return False
+    if pid <= 1:
+        return False
+    # Two signals, because which one works depends on what is in the pane.
+    # An agent takes SIGTERM and shuts down; an interactive shell ignores it
+    # outright, and a shell that ignores it is a container that stays up. Then
+    # SIGHUP, which is what tmux sends when a pane is closed, and which every
+    # shell answers - the reason closing a boxed tab has always reaped its
+    # container while stopping one politely did not.
+    started = time.time()
+    for when, what in ((0.0, signal.SIGTERM), (DRAIN_FIRST, signal.SIGHUP)):
+        while time.time() - started < when:
+            if gone(tm, pane):
+                return True
+            time.sleep(0.15)
+        try:
+            os.kill(pid, what)
+        except OSError:
+            return True                 # already gone
+    while time.time() - started < DRAIN_WAIT:
+        if gone(tm, pane):
+            return True
+        time.sleep(0.15)
+    return False
+
+
+def gone(tm: Tmux, pane: str) -> bool:
+    """Whether the pane's command has ended. True if the pane itself has."""
+    try:
+        return tm.fmt(pane, "#{pane_dead}").strip() == "1"
+    except RuntimeError:
+        return True
+
+
+def cmd_refence(args) -> int:
+    """Put a running tab behind a different fence, without closing it.
+
+    `C-g B` boxes the tab you are in - the agent comes back inside a
+    container - and `C-g b` brings it back out. Everything around it stays:
+    the same window in the same place, the same sidebar pane, the same notes
+    in the same store, the same conversation. tmux respawns the pane rather
+    than opening a new tab, which is what keeps the pane id and with it
+    every option and every pairing hung off it.
+
+    What does not survive is the agent's process, because there is no moving
+    a running one into a container: it restarts, resumes, and replays the
+    conversation onto a fresh screen. So a turn in flight is interrupted, and
+    the notes re-place themselves against the replay exactly as they do after
+    `resume`. The conversation itself is carried over first - see
+    `carry_history`, and the tab refuses to move rather than arrive without
+    it.
+
+    Nothing here builds an image. A key you pressed should not go quiet for
+    three minutes: an image that is not there yet is said so, with the one
+    command that makes it.
+    """
+    tm = Tmux(args.socket)
+    pane = claude_pane(tm, args.pane) or args.pane
+    if not pane or not tm.pane_exists(pane):
+        tell(tm, args.client, "no tab here to move")
+        return 1
+    want = fence_named(getattr(args, "sandbox", "") or "")
+    if not want:
+        die(f"say which fence to move to: {fence_choices()}")
+    agent = agent_of(tm, pane)
+    project = resolve_project(tm, pane, args.project)
+    command = launched_as(tm, pane, agent)
+    if fenced_by(command) == want.name:
+        tell(tm, args.client, "this tab is already running on your machine"
+             if want is OFF else "this tab is already in a namespace"
+             if want is BWRAP else f"this tab is already in a {want.name} box")
+        return 0
+
+    image = getattr(args, "sandbox_image", "") or DEFAULT_IMAGE
+    extra = list(getattr(args, "sandbox_arg", None) or [])
+    if want.needs:
+        why = unavailable(want)
+        if why:
+            tell(tm, args.client, f"no box for this tab: {why}")
+            return 1
+        if want.uses_image:
+            # Of this engine, which is the question docker's answer cannot
+            # stand in for: the two keep separate stores, so a machine that
+            # has built the image for docker has not built it for podman.
+            if not image_built(image, want.cli):
+                tell(tm, args.client,
+                     f"{image} is not built for {want.cli} yet: run "
+                     f"sticky-chat sandbox --build {want.name}")
+                return 1
+            # The image installs one agent. Asked before anything is killed,
+            # because a pane respawned on a command that is not there dies,
+            # and a dead pane takes its window and the sidebar with it.
+            program = (shlex.split(inner_command(command)) or [""])[0]
+            if program and not runs_in_image(image, program, extra, want.cli):
+                # The whole word, path and all: a tab running
+                # `/Users/you/bin/claude` is not asking for the `claude` the
+                # image has, and saying "no claude in it" of an image that
+                # has one sends you looking in the wrong place.
+                tell(tm, args.client,
+                     f"{image} has no {program} in it: add it to "
+                     f"{dockerfile_path()} and run sticky-chat sandbox "
+                     f"--build {want.name}")
+                return 1
+            # A fence that runs the host's own programs answers the same
+            # question off the path - no image to check, and no container to
+            # start to find out. It is asked all the same, and for the same
+            # reason: this is the last moment at which the tab is still
+            # whole.
+            why = unreachable(want, command, project, extra)
+            if why:
+                tell(tm, args.client, why)
+                return 1
+
+    session = tm.option(pane, "@sticky_session")
+    # Which conversation to carry, from the three places that may know: what
+    # the agent told us it called this one, what its command line asks for,
+    # and the id we chose when the tab was made. The command line counts
+    # because a tab that has been boxed before says `--resume <id>` on it,
+    # and that is a better answer than a `tab-` key of ours.
+    known = (tm.option(pane, "@sticky_agent_session")
+             or session_named(command, agent))
+    carried, problem = carry_history(agent, project, known or session,
+                                     home_of(command),
+                                     "" if want is OFF
+                                     else agent_home(agent.name))
+    if not carried and not getattr(args, "anyway", False):
+        tell(tm, args.client, f"{problem}; --anyway moves it anyway and "
+                              f"starts a fresh conversation")
+        return 1
+
+    fresh = refence(resume_command({"command": command, "agent": agent.name,
+                                    "session": session,
+                                    "agent_session": known,
+                                    "continued": session.startswith("tab-")},
+                                   agent),
+                    want, project, agent, image, extra)
+    make_home(fresh)
+    rows = tm.option(pane, "@sticky_virtual_rows")
+    virtual = int(rows) if rows.strip().isdigit() else 0
+    launched = time.time()              # before the pane, as in `open_tab`
+    if inside_pane(tm, pane):
+        # From in here the next few lines would be cut short by their own
+        # work: tmux does it instead.
+        return hand_over(tm, pane, args, want)
+
+    stuck = False
+    if home_of(command):
+        # Take the container with it. `respawn-pane -k` kills the pane's
+        # process outright, and a container client killed outright does not
+        # pass the signal on: the container keeps running with nothing
+        # attached to it, and unboxing a tab twice would leave two behind.
+        # Asked to stop instead, the client forwards it and `--rm` clears up -
+        # podman's client as well as docker's, which is why `drain` has
+        # nothing engine-shaped in it.
+        stuck = not drain(tm, pane)
+    try:
+        tm.run("respawn-pane", "-k", "-c", project, "-t", pane,
+               prime_rows(fresh, virtual) if virtual else fresh)
+    except RuntimeError as exc:
+        # The old process is already gone by now, so the tab is stopped
+        # rather than moved. Say which, and put the pane's own behaviour
+        # back: pressing the key again retries from the line still recorded
+        # on it.
+        tm.ok("set-option", "-p", "-u", "-t", pane, "remain-on-exit")
+        tell(tm, args.client, f"the tab stopped and would not restart: {exc}")
+        return 1
+    tm.ok("set-option", "-p", "-u", "-t", pane, "remain-on-exit")
+    tm.set_option(pane, "@sticky_agent_cmd", fresh)
+    # The sidebar reads this every time it goes looking for what the agent
+    # wrote down, rather than once at the start, so a tab that moves is read
+    # in its new home from the next pass on.
+    tm.set_option(pane, "@sticky_home", home_of(fresh))
+    mark_launch(tm, pane, agent, launched, known)
+    if session:
+        # The id goes into the record as well where the command line was the
+        # one that knew it, so that a later `resume` asks for the same
+        # conversation rather than the last one in the directory. Only when
+        # there is one: an empty field would wipe what the record holds.
+        #
+        # A pane with no session of ours - a plain shell window in the
+        # session - is boxed just the same and remembered by nobody, which is
+        # what it was before.
+        record_window(session, command=fresh,
+                      **({"agent_session": known} if known else {}))
+    # A container that would not stop is left running, and saying so is the
+    # whole of the handling: the tab has moved, and what is left is one `rm`
+    # that only you can decide to make. Named for the engine it was in rather
+    # than the one it is going to, because the thing still running is the old
+    # one and `docker ps` finds nothing a podman container left behind. Only
+    # of a container at all: a namespace that would not stop politely is one
+    # tmux's own kill takes, because `--die-with-parent` does not need our
+    # cooperation.
+    was = fence_named(fenced_by(command))
+    engine = was.cli if was and was.cli else ""
+    left = (f" - the container it was in would not stop, so it is still "
+            f"running: {engine} ps") if stuck and engine else ""
+    if want is OFF:
+        said = f"{agent.short} is back on your machine"
+    elif want is BWRAP:
+        said = (f"{agent.short} is in a namespace: this project and your "
+                f"toolchain, and none of the rest of your home")
+    else:
+        said = (f"{agent.short} is in a {want.name} box: this project and "
+                f"nothing else")
+    if not getattr(args, "quiet", False) or stuck:
+        tell(tm, args.client, said + left)
+    return 0
+
+
+# How long each signal gets before the next one up. Short, because the
+# escalation is the whole point: a thing that ignored SIGINT is not going to
+# answer it five seconds later.
+KILL_GRACE = 2.0
+
+
+def running_under(top: int, tty: str = "") -> list[tuple[int, str]]:
+    """Everything the pane is running, deepest first, as (pid, command).
+
+    Descended from `top` by parentage rather than by process group, which is
+    the entire reason this exists: the runaway that prompted it was a `node`
+    three levels down in a group of its own, so the terminal's Ctrl-C went to
+    the script and never to the thing actually running. A walk down the
+    parent links finds it; a signal to the foreground group does not.
+
+    Deepest first, so a parent cannot be told its child has gone and start
+    another one. `top` itself is never in the list: it is the pane's own
+    process, and killing that is killing the tab.
+
+    Then anything else holding the pane's terminal, which catches the case
+    parentage cannot: a job whose parent has exited is re-parented to pid 1
+    and leaves the tree, but it keeps the tty it was started on. What
+    escapes both is a child that detached from the terminal as well - a
+    `setsid`, a daemon - and nothing about it says which tab it came from.
+    That one is a `pkill` of yours; `--list` says what can be seen.
+    """
+    try:
+        done = subprocess.run(["ps", "-axo", "pid=,ppid=,tty=,command="],
+                              capture_output=True, text=True, timeout=20)
+    except (OSError, subprocess.SubprocessError):
+        return []
+    kids: dict[int, list[tuple[int, str]]] = {}
+    here: list[tuple[int, str]] = []
+    want = (tty or "").replace("/dev/", "")
+    for line in done.stdout.splitlines():
+        parts = line.split(None, 3)
+        if len(parts) < 3 or not parts[0].isdigit() or not parts[1].isdigit():
+            continue
+        pid, ppid, where = int(parts[0]), int(parts[1]), parts[2]
+        command = parts[3] if len(parts) > 3 else ""
+        kids.setdefault(ppid, []).append((pid, command))
+        if want and where == want and pid != top:
+            here.append((pid, command))
+    found: list[tuple[int, str]] = []
+    rank: list[int] = [top]
+    while rank:
+        for kid, command in kids.get(rank.pop(), []):
+            found.append((kid, command))
+            rank.append(kid)
+    found.reverse()
+    seen = {pid for pid, _ in found}
+    return found + [(pid, command) for pid, command in here
+                    if pid not in seen]
+
+
+def ours(pid: int) -> set[int]:
+    """This process and everything it hangs off, by pid.
+
+    `sticky-chat kill` run from a key binding is a child of the tmux server
+    and never of the pane. Run from the pane itself - your own shell, or the
+    agent's - it is a descendant of the very tree it is about to signal, and
+    without this it kills itself halfway through and reports nothing.
+    """
+    mine = set()
+    for _ in range(64):
+        if pid <= 1 or pid in mine:
+            break
+        mine.add(pid)
+        pid = parent_of(pid)
+    return mine
+
+
+def cmd_kill(args) -> int:
+    """Stop what the tab is running, without stopping the tab.
+
+    `C-g k`. Everything descended from the pane's own process goes - a test
+    run, a build, a dev server, whatever the agent started and cannot get
+    back out of - and the pane's own process stays, so an agent keeps its
+    conversation and a shell keeps its history. For the tab itself there is
+    tmux's own `prefix &`, and for the agent there is its own way out.
+
+    Three signals in turn, because that is what the thing it was written for
+    needed. SIGINT is the Ctrl-C that actually arrives: a tab that ignores
+    the keystroke does so because the terminal sends it to one process group
+    and the runaway is in another, and a signal addressed by pid has no such
+    trouble. Then SIGTERM for what traps INT, then SIGKILL for what traps
+    both. What survives all three is reported rather than retried.
+    """
+    tm = Tmux(args.socket)
+    pane = claude_pane(tm, args.pane) or args.pane
+    if not pane or not tm.pane_exists(pane):
+        tell(tm, args.client, "no tab here to stop anything in")
+        return 1
+    try:
+        top = int(tm.fmt(pane, "#{pane_pid}") or 0)
+    except (RuntimeError, ValueError):
+        top = 0
+    if top <= 1:
+        tell(tm, args.client, "cannot tell what that tab is running")
+        return 1
+    skip = ours(os.getpid())
+    tree = [(pid, command)
+            for pid, command in running_under(top, tm.fmt(pane, "#{pane_tty}"))
+            if pid not in skip]
+    if not tree:
+        held = tm.fmt(pane, "#{pane_current_command}") or "nothing"
+        tell(tm, args.client, f"nothing to stop: the tab is running {held} "
+                              f"and nothing under it")
+        return 0
+
+    def named(pid: int, command: str) -> str:
+        """A process the way somebody looking for it would say it."""
+        words = shlex.split(command) if command else []
+        for word in words:
+            if word.startswith("-"):
+                continue
+            return os.path.basename(word)
+        return str(pid)
+
+    names = [named(pid, command) for pid, command in tree]
+    if getattr(args, "list", False):
+        for pid, command in tree:
+            print(f"{pid:>7}  {command[:terminal_width() - 10]}")
+        return 0
+    if not getattr(args, "yes", False) and sys.stdin.isatty():
+        print(f"{BOLD}stop {len(tree)}{RESET}  "
+              f"{DIM}{', '.join(names[:6])}{RESET}")
+        if not ask("stop them? [y/N] ", "n").lower().startswith("y"):
+            return 0
+
+    left = [pid for pid, _ in tree]
+    for signal_now in (signal.SIGINT, signal.SIGTERM, signal.SIGKILL):
+        for pid in left:
+            try:
+                os.kill(pid, signal_now)
+            except OSError:
+                pass                    # already gone, or not ours to signal
+        until = time.time() + KILL_GRACE
+        while time.time() < until:
+            left = [pid for pid in left if alive(pid)]
+            if not left:
+                break
+            time.sleep(0.1)
+        if not left:
+            break
+
+    went = len(tree) - len(left)
+    said = f"stopped {went}: {', '.join(names[:6])}"
+    if len(names) > 6:
+        said += f" and {len(names) - 6} more"
+    if left:
+        said += (f" - {len(left)} would not go, not even to KILL: "
+                 f"{' '.join(str(pid) for pid in left)}")
+    if not getattr(args, "quiet", False):
+        tell(tm, args.client, said)
+    return 0
+
+
+def alive(pid: int) -> bool:
+    """Whether a pid is still there. Signal zero asks without asking."""
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except OSError:
+        return True                     # there, and not ours to signal
+    return True
+
+
+def cmd_auto(args) -> int:
+    """Ask a tab to say `continue` when its agent stops of its own accord.
+
+    The clock in the sidebar waits out a limit nobody chose. This is the
+    other half of the same wish, and it has to be asked for: an agent that
+    stops because it believes it has finished is usually right, and a tab
+    that argued with that every time would be unusable.
+
+    `C-g a` is five more and stacks, so twice is ten - a count rather than a
+    switch because the honest version of "keep going" is "keep going for a
+    while and then let me look". `C-g A` is the switch, for the times when
+    you know it is an hour of work and you are going to bed, and pressing it
+    again is how it stops: one key that means "not this" is better than a
+    third binding nobody will remember.
+
+    The count lives on the agent's pane, so the sidebar reads it on its next
+    pass without being told, a reload keeps it, and `tmux show-options` can
+    answer what a tab is about to do.
+    """
+    tm = Tmux(args.socket)
+    pane = claude_pane(tm, args.pane) or args.pane
+    if not pane or not tm.pane_exists(pane):
+        tell(tm, args.client, "no agent tab here to carry on")
+        return 1
+    now = (tm.option(pane, "@sticky_autocontinue") or "").strip()
+    was = int(now) if now.lstrip("-").isdigit() else 0
+
+    if getattr(args, "off", False):
+        left = 0
+    elif getattr(args, "forever", False):
+        # The toggle. Arming for ever is the one state somebody wants out of
+        # in a hurry, and the key that put it there is the key to hand.
+        left = 0 if was == AUTO_FOREVER else AUTO_FOREVER
+    elif was == AUTO_FOREVER:
+        # Already without end: adding five to that is not a thing, and
+        # quietly turning it into five would be a reduction nobody asked for.
+        tell(tm, args.client, f"{agent_of(tm, pane).short} is already "
+                              f"carrying on until you say otherwise")
+        return 0
+    else:
+        left = max(0, was) + max(1, int(getattr(args, "add", AUTO_STEP)
+                                        or AUTO_STEP))
+
+    if left:
+        tm.ok("set-option", "-p", "-t", pane, "@sticky_autocontinue",
+              str(left))
+    else:
+        tm.ok("set-option", "-p", "-u", "-t", pane, "@sticky_autocontinue")
+    # Said out loud, because this is the tab agreeing to act while nobody is
+    # watching it. The sidebar carries the same thing standing, on its own
+    # row and in the footer.
+    short = agent_of(tm, pane).short
+    if left == AUTO_FOREVER:
+        said = f"carrying {short} on until you say otherwise"
+    elif left:
+        said = (f"carrying {short} on {left} more "
+                f"{'time' if left == 1 else 'times'}")
+    else:
+        said = f"{short} stops where it stops again"
+    if not getattr(args, "quiet", False):
+        tell(tm, args.client, said)
+    return 0
+
+
+def cmd_sandbox(args) -> int:
+    """Say what a fenced tab would run in, and build what it needs.
+
+    Three things worth knowing before a tab opens in one: whether this
+    machine can run a container at all, whether the image has been built,
+    and where the agent's home is - because that home is where a login
+    lives, and deleting it is how you log a sandboxed agent out.
+
+    "Whether the image has been built" stopped being one question when there
+    was more than one engine. docker and podman keep separate image stores, so
+    the same tag is two images and a machine can perfectly well have one of
+    them and not the other: every fence reports its own, and `--build` takes
+    the name of the engine to fill - or, given none, fills the one a new tab
+    would open in, which on a machine with a single engine is the only answer
+    there was.
+
+    `--build` is the image, and an image belongs to a container: the namespace
+    fence has nothing to build, which is most of why it is here.
+    """
+    if getattr(args, "set", None):
+        fence = fence_named(args.set)
+        if not fence:
+            die(f"no such sandbox: {args.set} (one of {fence_choices()})")
+        remember(fence.name)
+        print(f"sticky: new tabs default to {fence.name}")
+        return 0
+    if getattr(args, "build", None) is not None:
+        fence = engine_named(args.build)
+        if not fence:
+            die(f"nothing to build for {args.build}: it runs no container "
+                f"(one of {', '.join(f.name for f in FENCES if f.cli)})")
+        why = unavailable(fence)
+        if why:
+            die(why)
+        image = args.sandbox_image or DEFAULT_IMAGE
+        problem = build_image(image, fence.cli)
+        if problem:
+            die(problem)
+        print(f"sticky: built {image} for {fence.cli}")
+        return 0
+
+    image = args.sandbox_image or DEFAULT_IMAGE
+    print(f"{BOLD}sandbox{RESET}  {DIM}new tabs open on "
+          f"{default_fence()}{RESET}\n")
+    for fence in FENCES:
+        why = unavailable(fence)
+        state = f"{DIM}{why}{RESET}" if why else "ready"
+        if fence.cli and not why:
+            # Asked of this engine and not of the machine: the answer is
+            # about a store only this fence can see into. A fence that
+            # cannot run is not asked at all, because an engine that is
+            # down answers an `image ls` with a timeout rather than a no.
+            state += (f", {image} built" if image_built(image, fence.cli)
+                      else f", {image} not built yet")
+        # "ready" of a fence nobody has run would be the wrong half of the
+        # truth: this machine can start it, and nobody has watched it work.
+        label = fence.label if fence.tested else f"{fence.label}, untested"
+        print(f"  {fence.name:<8} {fence.blurb}")
+        print(f"  {'':<8} {DIM}{label}{RESET}, {state}")
+        # The half the prompt has no room for: what keeping this fence
+        # working asks of you.
+        for line in wrap(fence.costs, max(40, terminal_width() - 12), 3):
+            print(f"  {'':<8} {DIM}{line}{RESET}")
+    for note in FENCE_NOTES:
+        for n, line in enumerate(wrap(note, max(40, terminal_width() - 6), 3)):
+            print(f"  {DIM}{' ' if n else chr(0x2022)} {line}{RESET}")
+    print(f"\n  images    built from {dockerfile_path()}")
+    # Only the ones that have one. A home is made the first time a tab of
+    # that agent is fenced, and an empty list is the honest answer before
+    # any has been.
+    for name in AGENTS:
+        home = agent_home(name)
+        if os.path.isdir(home):
+            print(f"  {name:<9} home {home}")
+    return 0
+
+
 def cmd_start(args) -> int:
     tm = Tmux(args.socket)
     binary = self_path()
     if getattr(args, "ask", False):
         return open_project_prompt(tm, binary, args)
     if getattr(args, "ask_here", False):
-        project, chose = ask_project(tm, getattr(args, "source_pane", None),
-                                     args.dir)
+        project, chose, fenced = ask_project(
+            tm, getattr(args, "source_pane", None), args.dir)
         if not project:
             return 0                    # cancelled: nothing was opened
+        # Answered, so it is not a default any more: `fence_tab` takes an
+        # explicit answer over anything the tab beside it was running.
+        args.sandbox = fenced
         source = getattr(args, "source_pane", None)
         here = agent_of(tm, source).name if source else DEFAULT_AGENT
         if chose != here:
@@ -2100,6 +3011,9 @@ def cmd_start(args) -> int:
             base += list(agent.no_menu_args)
         command = " ".join(shell_quote(c) for c in base + extra)
 
+    command = fence_tab(command, project, agent, args,
+                        inherited=bool(inherited))
+
     # An agent picks a conversation id of its own unless told one. Telling it
     # means the tab can be asked for by name after a reboot; anything the
     # user said about sessions wins over that, and an agent whose profile
@@ -2126,6 +3040,7 @@ def cmd_start(args) -> int:
     # looking one up by name can land in the wrong window.
     launch = (prime_rows(command, args.virtual_rows)
               if args.virtual_rows else command)
+    make_home(command)                  # before docker makes it, as root
     launched = time.time()              # before the pane, as in `open_tab`
     cols, rows = room_for_new_windows(tm)     # as in `open_tab`
     if not tm.server_running():
@@ -2151,6 +3066,11 @@ def cmd_start(args) -> int:
     install_hooks(tm)                   # the server exists now, so it can
     window = tm.fmt(left, "#{session_name}:#{window_index}")
     tm.set_option(left, "@sticky_agent_cmd", command)
+    # Where this tab's agent keeps what it writes down. Empty on the host,
+    # where it is your own home and everybody knows; a directory of ours
+    # when the agent is in a container, so the sidebar can read the
+    # transcript without knowing that there is one.
+    tm.set_option(left, "@sticky_home", home_of(command))
     tm.set_option(left, "@sticky_session", session or unknown)
     tm.set_option(left, "@sticky_agent", agent.name)      # before the sidebar
     # On the window, not the pane: the status line resolves a format
@@ -2167,7 +3087,7 @@ def cmd_start(args) -> int:
     record_window(session or unknown, project=project, command=command,
                   store=store_dir, continued=not session, agent=agent.name,
                   width=args.sidebar_width, virtual_rows=args.virtual_rows,
-                  name=name)
+                  name=name, index=tab_index(tm, left))
 
     if args.virtual_rows:
         virtual_window(tm, window, args.virtual_rows)

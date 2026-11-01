@@ -12,22 +12,26 @@ from .commands import (
     ask,
     cmd_add,
     cmd_attach,
+    cmd_auto,
     cmd_clear,
     cmd_click,
     cmd_commit,
     cmd_fit,
     cmd_fork,
+    cmd_kill,
     cmd_list,
     cmd_log,
     cmd_marks,
     cmd_note,
     cmd_place,
     cmd_quit,
+    cmd_refence,
     cmd_reload,
     cmd_reopen,
     cmd_restore,
     cmd_resume,
     cmd_rm,
+    cmd_sandbox,
     cmd_start,
     cmd_sweep,
     cmd_trace,
@@ -35,7 +39,8 @@ from .commands import (
     run_summary,
 )
 from .config import DEFAULT_SIDEBAR_WIDTH, default_virtual_rows
-from .sidebar import cmd_sidebar
+from .sandbox import DEFAULT_IMAGE, fence_choices
+from .sidebar import AUTO_STEP, cmd_sidebar
 from .store import last_run
 from .tmux import Tmux
 from .util import die
@@ -78,6 +83,16 @@ def build_parser() -> argparse.ArgumentParser:
                                        f"{agent_choices()}")
         p.add_argument("--agent-cmd", metavar="CMD",
                        help="the command to run, instead of the profile's")
+        p.add_argument("--sandbox", metavar="HOW",
+                       help="how much of the disk the agent may reach: "
+                            f"{fence_choices()}; the prompt asks, and "
+                            "remembers what you said")
+        p.add_argument("--sandbox-image", metavar="IMAGE",
+                       help=f"the container image to run in "
+                            f"(default {DEFAULT_IMAGE})")
+        p.add_argument("--sandbox-arg", metavar="ARG", action="append",
+                       help="an extra argument for the fence, repeatable: "
+                            "another mount, another variable")
         p.add_argument("--detach", action="store_true")
         p.add_argument("--local", action="store_true",
                        help="keep notes in <dir>/.sticky instead of ~/.sticky")
@@ -265,6 +280,58 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("id")
     p.set_defaults(func=cmd_rm)
 
+    p = common(sub.add_parser(
+        "kill", help="stop what the tab is running, not the tab"))
+    p.add_argument("--list", action="store_true",
+                   help="say what would be stopped, and stop nothing")
+    p.add_argument("--yes", action="store_true", help="do not ask first")
+    p.add_argument("--client")
+    p.add_argument("--quiet", action="store_true")
+    p.set_defaults(func=cmd_kill)
+
+    p = common(sub.add_parser(
+        "auto", help="say `continue` when the agent stops on its own"))
+    p.add_argument("--add", type=int, nargs="?", const=AUTO_STEP,
+                   metavar="N", help=f"this many more times (default "
+                                     f"{AUTO_STEP}), on top of what is armed")
+    p.add_argument("--forever", action="store_true",
+                   help="until you say otherwise; again to stop")
+    p.add_argument("--off", action="store_true", help="stop carrying on")
+    p.add_argument("--client")
+    p.add_argument("--quiet", action="store_true")
+    p.set_defaults(func=cmd_auto)
+
+    p = common(sub.add_parser(
+        "refence", help="move a running tab into a box, or out of one"))
+    p.add_argument("--sandbox", metavar="HOW", required=True,
+                   help=f"which fence to move it behind: {fence_choices()}")
+    p.add_argument("--sandbox-image", metavar="IMAGE",
+                   help=f"the container image to run in "
+                        f"(default {DEFAULT_IMAGE})")
+    p.add_argument("--sandbox-arg", metavar="ARG", action="append",
+                   help="an extra argument for the fence, repeatable")
+    p.add_argument("--anyway", action="store_true",
+                   help="move it even if the conversation cannot be carried "
+                        "over, which starts a fresh one")
+    p.add_argument("--client")
+    p.add_argument("--quiet", action="store_true")
+    p.set_defaults(func=cmd_refence)
+
+    p = sub.add_parser(
+        "sandbox", help="what fences an agent tab, and build what it needs")
+    # The engine is optional because on a machine with one of them it is not
+    # a question, and it exists because docker and podman keep separate image
+    # stores: the same tag built for one is not there for the other, so
+    # `--build` has to be able to say which store it is filling.
+    p.add_argument("--build", metavar="HOW", nargs="?", const="",
+                   help="build the container image tabs run in, for the "
+                        "engine named or the one new tabs open in")
+    p.add_argument("--set", metavar="HOW",
+                   help=f"what new tabs default to: {fence_choices()}")
+    p.add_argument("--sandbox-image", metavar="IMAGE",
+                   help=f"act on this image instead of {DEFAULT_IMAGE}")
+    p.set_defaults(func=cmd_sandbox)
+
     p = common(sub.add_parser("clear", help="delete notes"))
     p.add_argument("--committed", action="store_true")
     p.set_defaults(func=cmd_clear)
@@ -276,7 +343,8 @@ def build_parser() -> argparse.ArgumentParser:
 # Our own flags, and how many values each takes, so they can be lifted out of
 # a command line that is otherwise passed straight to the agent.
 OUR_FLAGS = {"--sidebar-width": 1, "--agent-cmd": 1,
-             "--agent": 1, "--socket": 1,
+             "--agent": 1, "--socket": 1, "--sandbox": 1,
+             "--sandbox-image": 1, "--sandbox-arg": 1,
              "--sticky-dir": 1, "--local": 0, "--detach": 0, "--menus": 0,
              "--virtual-rows": 1, "--no-virtual-rows": 0}
 

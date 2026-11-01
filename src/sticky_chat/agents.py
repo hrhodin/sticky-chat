@@ -143,6 +143,14 @@ class Agent:
     # not prose scraped off a screen that might only be talking *about*
     # limits. See `limit_notice`.
     notice_path: str = ""
+    # Whether resuming a conversation starts a *new* record rather than
+    # writing on at the end of the old one. Claude Code does: `--resume <id>`
+    # copies what was said into a file of its own with a new id, and the file
+    # we named stops being written. So the id we chose is the id it was
+    # launched with and nothing more, and a tab that has been reopened once
+    # is reading - and would resume from - a transcript that stopped days
+    # ago. `continued_session` is how the live one is found again.
+    forks_on_resume: bool = False
     state_db_glob: str = ""
     state_db_table: str = ""
     state_db_id_column: str = ""
@@ -206,6 +214,11 @@ class Agent:
         again is work for nothing - and it keeps the default profile out of
         this code path entirely.
         """
+        if self.forks_on_resume:
+            # Ours to begin with and not for long: the first resume makes an
+            # id neither of us chose, and there is no knowing it without
+            # looking.
+            return True
         return (bool(self.transcript_glob or self.state_db_glob)
                 and not self.names_sessions)
 
@@ -247,10 +260,12 @@ CLAUDE = Agent(
     paste_placeholder=CLAUDE_PASTE,
     # No `transcript_glob`, though Claude writes one it would fit
     # (~/.claude/projects/<escaped path>/<uuid>.jsonl, the id in the name).
-    # We name the conversation ourselves here, so there is nothing on disk
-    # to learn - and an empty glob is the second lock, next to
-    # `names_sessions`, keeping the default profile out of the discovery
-    # path altogether.
+    # A glob is the wrong instrument here: three tabs on one project write
+    # into one directory, and "the newest file" would hand this tab the
+    # conversation next door. `forks_on_resume` asks the precise question
+    # instead - which of these files carries *our* id - and `notice_path`
+    # already says which directory to ask in.
+    forks_on_resume=True,
 )
 
 
@@ -681,6 +696,28 @@ def transcript_slug(project: str) -> str:
     return re.sub(r"[^A-Za-z0-9]", "-", os.path.abspath(project))
 
 
+def conversation_file(agent: Agent, project: str, session: str,
+                      home: str = "") -> str:
+    """Where this agent writes down one conversation, under `home`.
+
+    Only for a profile that spells it out: gemini's transcript is found by
+    glob and codex keeps a database, and neither can be named from an id and
+    a project the way Claude's can. Empty for those, and for a tab whose
+    conversation has no id yet.
+
+    `home` is the difference between a tab on this machine and a tab in a
+    container, whose home is a directory of ours. The path is otherwise the
+    same either side, because a container mounts the project where the
+    project already is - which is what makes carrying a conversation from
+    one to the other a copy rather than a translation.
+    """
+    if not (agent.notice_path and session and project):
+        return ""
+    return os.path.join(home or os.path.expanduser("~"),
+                        agent.notice_path.format(slug=transcript_slug(project),
+                                                 session=session))
+
+
 def limit_notice(agent: Agent, project: str, session: str,
                  home: str = "") -> tuple[str, bool]:
     """What the agent last announced about its limit, and who will act on it.
@@ -704,11 +741,9 @@ def limit_notice(agent: Agent, project: str, session: str,
     transcript for this profile, no file yet, or no notice in the tail of
     it - and the caller falls back to the screen.
     """
-    if not (agent.notice_path and session and project):
+    path = conversation_file(agent, project, session, home)
+    if not path:
         return "", False
-    path = os.path.join(home or os.path.expanduser("~"),
-                        agent.notice_path.format(slug=transcript_slug(project),
-                                                 session=session))
     try:
         with open(path, "rb") as fh:
             fh.seek(0, os.SEEK_END)
@@ -732,8 +767,84 @@ def limit_notice(agent: Agent, project: str, session: str,
     return "", False
 
 
+# How much of a transcript's start is read looking for the id it continues.
+# The records a resume copies over come first, so the answer is in the first
+# few of them; a quarter of a megabyte is dozens of records and one read.
+CONTINUED_HEAD = 262144
+
+
+def continued_session(agent: Agent, project: str, session: str,
+                      since: float = 0.0, home: str = "") -> str:
+    """The id a conversation carries on under, once it has been resumed.
+
+    Claude Code's `--resume <id>` does not write on at the end of the record
+    it was given: it copies what was said into a new file with a new id, and
+    the file we named is never touched again. Everything that reads a
+    transcript by name - the limit notice, the id a tab is reopened with, the
+    conversation a boxed tab carries in with it - is then reading a record
+    that stopped at the moment the tab was last restarted.
+
+    The link is in what was copied. A resumed conversation's early records
+    are the old ones, and they keep the id they were written under, so the
+    continuation is the file in this project's directory that carries *our*
+    id and is not ours. That is an exact question, which matters here: three
+    tabs on one project write into one directory, and "the newest file"
+    would hand this tab the conversation next door.
+
+    The oldest one made after we started, where several match - two tabs
+    resumed from the same conversation each have a continuation carrying its
+    id, and the one that appeared as this tab started is this tab's.
+
+    Empty when nothing has continued it, which is the ordinary answer for a
+    tab nobody has resumed.
+    """
+    if not (agent.forks_on_resume and session and project):
+        return ""
+    mine = conversation_file(agent, project, session, home)
+    if not mine:
+        return ""
+    # The floor is when this tab started, and nothing else. The record we
+    # continue from is written for the last time at the very moment its
+    # continuation is made - one file's final line and the other's first are
+    # the same second - so measuring from that would rule out the one file
+    # we are looking for. Which it did.
+    here, want = os.path.dirname(mine), session.encode()
+    floor = since
+    best, born = "", 0.0
+    try:
+        for path in glob.iglob(os.path.join(glob.escape(here), "*.jsonl")):
+            if os.path.abspath(path) == os.path.abspath(mine):
+                continue
+            try:
+                stat = os.stat(path)
+            except OSError:
+                continue                # gone between the glob and the ask
+            # When it was made, not when it was last written: a conversation
+            # still being typed into is touched every minute, and what tells
+            # two continuations apart is which of them started here. The
+            # older of the two clocks, because a filesystem that keeps no
+            # birth time has only one of them, and because a copy - what
+            # carrying a conversation into a box makes - is born today with
+            # the age of what it came from written on it.
+            made = min(getattr(stat, "st_birthtime", stat.st_mtime),
+                       stat.st_mtime)
+            if made <= floor or (best and made >= born):
+                continue
+            try:
+                with open(path, "rb") as fh:
+                    if want not in fh.read(CONTINUED_HEAD):
+                        continue
+            except OSError:
+                continue
+            best, born = path, made
+    except OSError:
+        return ""
+    found = session_id_of(best, agent.session_keys) if best else ""
+    return found if found and found != session else ""
+
+
 def discover_session(agent: Agent, since: float, home: str = "",
-                     project: str = "") -> str:
+                     project: str = "", named: str = "") -> str:
     """What the agent called the conversation it opened in a tab. Or nothing.
 
     Gemini, codex and antigravity pick their own id and print it nowhere, so
@@ -753,6 +864,10 @@ def discover_session(agent: Agent, since: float, home: str = "",
     Costs one glob and one first line. Nothing here retries, waits or
     remembers: the caller decides how often to ask and when to stop.
     """
+    if agent.forks_on_resume:
+        # The id was ours to give, so there is no hunting to do - only the
+        # one exact question of whether it has been carried on elsewhere.
+        return continued_session(agent, project, named or "", since, home)
     if not (agent.transcript_glob or agent.state_db_glob):
         return ""                       # this profile cannot be asked
     # Escaped, because only the profile's half of this is a pattern: a home

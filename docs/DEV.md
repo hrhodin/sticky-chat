@@ -38,6 +38,7 @@ The files, in dependency order - each one imports only from those above it:
 | `tmux.py` | the `Tmux` wrapper; nothing else talks to tmux |
 | `agents.py` | one profile per coding agent: everything that is Claude's rather than ours, including where it writes its transcript |
 | `clipboard.py` | `pbcopy` / `wl-copy` / `xclip` / `xsel` |
+| `sandbox.py` | the fence around an agent: which one, how to build it, and how a fenced command line reads back |
 | `store.py` | `Store`, which store a pane is showing, and the tab records |
 | `placement.py` | which row on screen a note belongs to |
 | `sidebar.py` | what the right-hand pane draws, and its keys |
@@ -203,9 +204,9 @@ text. Scrolling away from a note's text therefore lists it above the rule
 rather than re-attaching it to a lookalike.
 
 A placement pass updates `abs_line`; only an exact match updates
-`anchor_abs`. Notes with no candidate are reported `offscreen`, with
-`where` set to `above` or `below` so the footer can count them in the right
-direction. `sticky-chat place --pane %N` prints a pass as JSON.
+`anchor_abs`. Notes with no candidate are reported `offscreen` and nothing
+more: the sidebar lists every one of them in the band above, in
+`history_order`. `sticky-chat place --pane %N` prints a pass as JSON.
 
 `pane_view` reads `#{history_size}`, `#{pane_height}` and
 `#{scroll_position}` in one format, captures the visible rows, then reads
@@ -386,11 +387,16 @@ jump, edit, jump; a `.last-edit` guard file drops the trailing jump.
 window taller than the client the band still sits at the top of the screen
 rather than the top of the window.
 
-`foot_lines` is the mirror of `band_lines`, for the notes `placements`
-marked `where: "below"`. It takes its rows off the bottom of the map —
-`map_h`, not `body_h`, bounds every aligned note — and never off the band
-above, so the two lists cannot squeeze each other out. Its entries go into
-`hits` like any other, so a click jumps and the button strikes out.
+There is no second band. `foot_lines` drew one at the foot for the notes
+`resolve` had marked `where: "below"`, which bought one thing - the note
+just past the bottom edge was the first you reached - and cost a guess
+about which side of the screen an unplaceable note fell on, a `map_h`
+distinct from `body_h`, a displacement pass for aligned notes whose row the
+foot band had taken, and a circular settling loop because the band's size
+depended on how many notes the guess had put in it. `band_window` now puts
+everything you cannot see beside its own line into the one list, including
+a note whose row is past the end of the map, and `room` is how it knows
+where that end is.
 
 ## Which pane has the keyboard
 
@@ -642,6 +648,33 @@ half-written message is taken as a plain copy. Both `MouseDragEnd1Pane`
 bindings pass it; the keyboard's `N` does not, so the keyboard always makes
 a note.
 
+## Middle-click
+
+tmux binds `MouseDown2Pane` itself, and its condition is
+`#{||:#{pane_in_mode},#{mouse_any_flag}}` - forward the click whenever the
+pane is in a mode. Sticky leaves the pane *in copy mode* after a selection
+on purpose: `copy-pipe-no-clear` and `stop-selection` rather than a cancel,
+so what you marked stays lit. The two together meant the one gesture people
+expect to follow a selection was the one a selection switched off, and
+marking text then middle-clicking did nothing at all.
+
+So it is bound in both copy-mode tables, with `pane_in_mode` out of the
+condition and `send -X cancel` before the paste - the same bargain as a
+printable key typed while scrolled back, where the keystroke leaves copy
+mode and lands at the prompt. `alternate_on` and `mouse_any_flag` still
+forward, as the wheel bindings do. The root-table binding adds one thing
+tmux's has not: the sidebar is never pasted into, because every character
+there is a command.
+
+What this is *not* is the X11 PRIMARY selection. Under tmux the drag belongs
+to tmux, so the terminal never makes a PRIMARY selection, and what
+middle-click pastes is the tmux buffer that `copy-pipe` fills on every
+selection - verified: `buffer0: 16 bytes: "SELECT-THIS-LINE"`. That makes the
+habit work within sticky on any platform, including macOS where there is no
+PRIMARY, and leaves cross-application middle-click (mark in a browser, paste
+here) unsupported: that would need `xclip -o -selection primary` on the way
+in and `xclip -selection primary` on the way out, both Linux-only.
+
 ## Why the keys are what they are
 
 The prefix is `C-g` because Claude Code uses `C-b` itself, and a prefix
@@ -663,6 +696,11 @@ Two keys go the other way. `C-g F` forks, so that `C-g f` keeps tmux's
 find-window, and `C-g L` lists notes, so that `C-g l` keeps last-window.
 `F` keeps its case inside the sidebar too, so the key is the same wherever
 you press it.
+
+`a` and `A` carry a tab on, and `B` and `b` box and unbox the one you are in;
+none of the four costs anything, because none is bound in tmux's default
+prefix table. Capital for the fence, small for
+taking it off, which is the same way round as every other pair here.
 
 `N` in copy mode costs vi's "previous search match".
 
@@ -901,6 +939,33 @@ before the pane exists. Gemini and codex have id-based resume but no way to
 be handed an id at the start: the id is theirs to choose, and until something
 reads it back, a tab on either resumed as a fresh conversation wearing the
 old tab's notes.
+
+**And the id we chose stops being the id.** `--resume <id>` in Claude Code
+does not write on at the end of the record it was given: it copies what was
+said into a file of its own with a new id, and the file we named is never
+touched again. So a tab reopened once was reading a transcript that stopped
+at the moment it was last restarted - which meant the limit notice was read
+from a dead file, and reopening the tab again resumed from the state it was
+in at the *first* reopen, losing everything since. One tab on this machine
+was holding an id whose transcript had not been written for a week.
+
+The link is in what was copied. A resumed conversation's early records are
+the old ones, and they keep the `session_id` they were written under, so the
+continuation is the file in this project's directory that carries *our* id
+and is not ours: `continued_session`. Not a glob, deliberately - three tabs
+on one project write into one directory, and "the newest file" hands this tab
+the conversation next door. Where several match, because the same
+conversation was resumed in two tabs, the one made after this tab started is
+this tab's; the clock used is the older of birth time and mtime, since a
+filesystem may keep no birth time and a copy is born today wearing the age of
+what it came from. `forks_on_resume` on the profile is what turns this on,
+and it makes `can_discover` true for a profile that names its own sessions -
+the one case where both are true at once.
+
+Because the question is exact rather than a guess at the newest file, it may
+be asked at any age: a sidebar started by `reload` hunts for a minute from
+*its* own start as well as the tab's, which is how a tab that was already
+running when this arrived ever learns the id it has really been using.
 
 All three write the conversation as a JSONL file whose **first line is a
 header carrying the id**, which is the whole mechanism. One rule per profile:
@@ -1193,6 +1258,30 @@ somebody having seen it and pressed Enter.
 
 ## Sending a batch somewhere else
 
+`C-g 1`-`9` from the sidebar, nine bindings generated by `send_to_tab_keys`
+because tmux binds a key and not a range. Each carries `select-window` as
+its other branch, so the digit does what tmux has always done with it
+everywhere except the one pane where a batch of notes is what you are
+holding - taking the key outright would have cost something used all day to
+buy something used now and then.
+
+It was a bare digit in the sidebar, and that is worth recording as a shape
+to avoid. The sidebar forwards any character it has no use for to the agent,
+so you can start typing with your eye on the notes; a digit was intercepted
+instead, and intercepted it pasted the whole pending batch into another
+conversation with nothing asked and nothing said. It happened: four notes
+from one project turned up in another project's chat, and the only trace was
+`committed_at` on four notes in the first project's store. A key that is
+silent, irreversible and one press away from a key that types is the wrong
+shape whatever it does.
+
+Two mechanical notes. The digits are out of `SIDEBAR_KEYS`, which is what
+`typing_through` reads, so they forward like letters. And
+`send_to_tab_keys` takes the binary rather than leaving `@BIN@` in its
+output: the text is spliced into the template *after* the template's own
+`@BIN@` pass, so a marker left there reaches the file unreplaced - as it
+did, and nine bindings pointed at a program called `@BIN@`.
+
 Where a note is read from and where it is handed to are two questions, and
 until now one answer served both. `commit --to-tab N` separates them: the
 notes come from this tab's store, the paste goes to the agent in tab N.
@@ -1272,6 +1361,239 @@ session flags, no fork, no discovery, because there is no conversation to
 name. Reading a log, a test run or a diff is the case - output worth
 annotating is not always printed by something you can talk to.
 
+## The fence around an agent
+
+`sandbox.py`. Three fences are implemented - `docker`, `podman` and `bwrap` -
+and the shape is a table so a fourth is a row rather than a branch in six
+files. The row carries the program it drives (`cli`), what has to be installed
+before it can be offered (`needs` - a separate question, because a fence can
+fence without an engine), what to say when the engine is installed but not
+answering (`down`, since docker has a daemon to start and podman a virtual
+machine), whether it has to be told to keep your uid (`keep_id`), how many of
+its own words sit between the marker and the agent's command (`follows` - an
+image for a container, nothing for a namespace), whether it runs an image at
+all (`uses_image`), and whether anybody has ever run it (`tested`, `caveat`,
+spelled as `agents.py` spells them).
+
+**The pane runs the container.** tmux starts `docker run -it ...` as the tab's
+command and the docker client hands the container's stdio to that pty, so
+sticky - which reads the pane, not the process - cannot tell the difference.
+Nothing above `sandbox.py` knows a container exists, and nothing in
+`sandbox.py` above `container_command` knows which engine ran it.
+
+**The command line is the record.** `container_command` puts the container in
+front of the agent's own command and ends the engine's arguments with
+`-e STICKY_SANDBOX=<fence> <image>`, which is both a fact the agent can read
+and the marker `split_command` counts from: the marker, the image, and
+everything after that is the agent's. How many words follow the marker is
+`Fence.follows`, declared by the fence and read back out of the marker's own
+value, because the boundary is not the same for every fence:
+`bwrap_command` ends bubblewrap's arguments with `--` and says the marker as
+`/usr/bin/env STICKY_SANDBOX=bwrap`, one word where `--setenv NAME VALUE`
+would have been two and found by nothing. Every function that edits a command
+line - `with_words`, `without_session`, `session_named`, `resume_command` -
+splits first, so a conversation id can never land on `docker run`. That one
+rule is what keeps `--session-id`, `--resume` and `--continue` working
+unchanged, including for an agent whose flags go first. Because the marker is
+found rather than counted to, `--userns` being one more word in front of the
+image costs nothing.
+
+**The project is mounted at its own path** rather than at `/workspace`, so
+the directory an agent files its transcript under - named after the project's
+path - is the same name inside and out.
+
+**The home comes back out.** The container's home is
+`~/.sticky/sandbox/<agent>`, a bind mount, so the login survives the
+container and the transcript is a file on this disk. `home_of` reads that
+path back off the command line; a tab carries it on `@sticky_home`, and the
+sidebar asks the pane each time it goes looking rather than holding it,
+because `C-g B` can move a tab while it is running. One home per agent and
+not per agent and engine: both engines are made to run as the same uid, so
+the two can share it, and a tab moved between them finds its conversation
+already where it will look.
+
+**Rootless podman is not docker.** The one real difference, and the only place
+the engines fork. docker's daemon is root, so `--user <uid>:<gid>` is obeyed.
+podman has already put you in a user namespace by the time `run` is typed:
+there your uid is the container's root and everything above it is a subuid, so
+the same `--user` runs as a subuid - bind-mounted files come back owned by
+100500 - and dropping it hands the agent root, which Claude Code refuses to
+skip permission prompts as. `container_command` adds
+`--userns=keep-id:uid=<uid>,gid=<gid>` for a fence whose row asks for it,
+which maps you to you. The explicit form rather than a bare `keep-id` because
+on macOS the user podman maps is the Linux account inside the machine VM,
+whose gid is not the one the image's `agent` was built with; skipped when
+`getuid()` is 0, where podman calls it an error. Verified on macOS, where the
+engine is in a VM and virtiofs hands files back owned by you whatever the
+container thought; on Linux the same flag needs the subuid ranges `useradd`
+writes into `/etc/subuid`, without which podman runs and `keep-id` does not.
+Everything else was checked and is the same on both: `-e NAME` with no value, absent variables dropped
+silently, `--init`, `--label`, `--filter label=`, a local short tag resolving
+locally, and a client that forwards a signal to its container.
+
+**Two image stores, one tag.** docker and podman do not share images, so
+`sticky-agent:latest` is two images and "is it built" has an answer per
+engine. Every image function takes the cli being asked - `image_built`,
+`build_image`, `ensure_image`, `runs_in_image` - `sandbox --build [HOW]` fills
+one store (`engine_named` resolves "which", defaulting to the fence a new tab
+would open in), and `sandbox` prints the state on each fence's own line. One
+tag and not two because the stores already separate them and a tag names what
+an image is. `daemon_running` is a cache per cli for the same reason: one
+boolean for the machine would have had podman inherit docker's answer, which
+offers a fence that cannot start and kills the pane as it opens. Its probe is
+a bare `info`, because `info --format {{.ServerVersion}}` is a docker field
+and a template podman cannot execute makes it exit non-zero - a running engine
+reported down.
+
+**Boxing in place.** `cmd_refence` respawns the pane rather than opening a
+tab, which keeps the pane id and with it the sidebar pairing, the store and
+the notes. Two things it has to get right. The agent restarts, so the
+conversation is copied into the home it is about to look in first
+(`carry_history`, newer wins) and the tab refuses to move rather than arrive
+without it. And a container client killed outright leaves its container
+running, so `drain` sets `remain-on-exit`, asks the client to stop - which
+both clients forward, and `--rm` clears up - and waits for the pane to be dead
+before respawning over it. `drain` signals the pane's process and so has
+nothing engine-shaped in it.
+
+`C-g B` is bound to `docker` and `C-g b` to `off`; podman is reached from the
+prompt, from `--sandbox podman`, or from `refence --sandbox podman`.
+
+Nothing on the key path builds an image: a keystroke that goes quiet for
+three minutes is a keystroke that looks broken, so a missing image is a
+message naming `sticky-chat sandbox --build`. The three checks that could
+leave a tab dead - no daemon, no image, no such program in it - all happen
+before anything is killed.
+
+**The namespace fence.** `bwrap`, and untested: written from bubblewrap's
+documentation on a machine that cannot run it, so the tests cover the
+composed line and one integration test skips itself everywhere but Linux.
+`bwrap_command` is where the reasoning is, at length, including what it does
+*not* fence - the network, /usr, the uid - and why there is no
+`--new-session` (setsid would take the pane's controlling terminal with it,
+and Ctrl-C would stop reaching the agent). Three places it is not simply a
+row in the table. `Fence.uses_image` is false, so `ensure_image`,
+`image_built` and `runs_in_image` are skipped and the question "is the agent
+in there" is answered by `unreachable`, which is a path question: the program
+is the host's own, and an agent installed under the home this fence replaces
+is not in it. `home_of` reads the home off `--setenv HOME` and the `--bind`
+onto it rather than off a fixed `/home/agent`, because the home goes on top
+of *yours* - the passwd file in there is the host's and says where your home
+is, so covering that path is what keeps `~` and `$HOME` the same answer. And
+`drain` has nothing to do: `--die-with-parent` means the pid namespace goes
+when bwrap does, including under the SIGKILL `respawn-pane -k` sends
+anyway.
+
+Being untested has one behavioural consequence, in `default_fence`: a fence
+with `tested=False` is offered by the prompt and chosen by hand, and is never
+what a machine that has not been asked gets, because a default that breaks
+the first tab after an upgrade is worse than no default. Taking a tab through
+it end to end on a Linux box and setting `tested=True` is the whole of what
+is left to do.
+
+## Why a scroll used to freeze the session
+
+Two things, both found by measuring rather than by reading.
+
+**A global fit on every mode change.** `pane-mode-changed` ran
+`sticky-chat fit` with no target, which wakes *every* sidebar - ten Python
+processes capturing their pane, re-placing their notes and redrawing at
+once. It fired entering copy mode and again leaving it, and `copy-mode -e`
+leaves whenever you reach the bottom, so a wheel wiggle fired it repeatedly.
+The `kill -USR1` beside it already wakes the one sidebar with something to
+redraw, so the fit now takes `--wake "#{window_id}"` and costs one.
+
+**An unbounded search for the marks.** tmux's copy-mode search scans the
+whole history and marks every match in it, and the cost is linear in both
+the rows and the number of alternatives. Measured on a 178-column pane:
+
+| history | alternatives | search |
+|---|---|---|
+| 60,000 | 1 | 0.26 s |
+| 60,000 | 8 | 0.85 s, and 4 s with the machine busy |
+| 2,000 | 8 | 0.04 s |
+
+The tabs on the machine this was found on held 21k, 23k, 29k and 194k rows,
+and the pattern was eight quotes chosen off the front of the store - so for
+notes taken an hour ago it matched *nothing*, which is the most expensive
+search there is: a full scan with no early exit, every time you turned the
+wheel.
+
+So `mark_pattern` is bounded twice. `within` is the last `MARK_HISTORY` rows
+plus the live screen, captured once (10-20 ms), and a quote that is not in
+there is never searched for - which turns the ordinary case into no search
+at all. And the count is what the history affords, `MARK_BUDGET` over the
+row count, so a short history still lights eight and a long one lights one.
+Past the budget the lighting is skipped: a pane that has printed two hundred
+thousand rows would cost most of a second of frozen server to light, and the
+sidebar lists those notes anyway. Measured after, on 60,000 rows: 0.12 s
+when nothing can match, 0.34 s when something does - and most of that is
+Python starting.
+
+## Stopping what a tab is running
+
+`C-g k` → `cmd_kill`. The pane's own process is never signalled: everything
+descended from it is, deepest first, and killing the pane's process is
+killing the tab, which tmux already has a key for.
+
+Parentage rather than process group, which is the whole point. A terminal
+sends Ctrl-C to the foreground process group, and the runaway that prompted
+this - a `node` under a `bash` under a shell, driving a Tauri app - sat in a
+group of its own, so the keystroke reached a script that trapped it and
+never the thing running. `running_under` walks the parent links instead, and
+then unions anything holding the pane's tty, which catches a job whose
+parent exited and left it re-parented to pid 1. A child that detached from
+the terminal too keeps nothing that ties it to a tab, and `--list` is honest
+about showing only what can be traced.
+
+`ours` is why it does not kill itself. From a key binding this runs as a
+child of the tmux server and is nowhere near the pane; run from inside the
+pane - your own shell, or the agent's Bash tool - it is a descendant of the
+very tree it is about to signal, so this process and its ancestors come out
+of the list first.
+
+SIGINT, SIGTERM, SIGKILL, two seconds each. INT first because it is the
+Ctrl-C that actually arrives when addressed by pid rather than by terminal;
+the escalation is short because something that ignored INT will not answer
+it five seconds later.
+
+## Carrying a tab on
+
+The limit clock in `cmd_sidebar` arms itself off a notice. `C-g a` is the
+same word sent for the opposite reason - the agent stopped because it
+believed it had finished - and it is asked for rather than inferred, because
+an agent that says it is done is usually right.
+
+The count is a pane option, `@sticky_autocontinue`, read with everything
+else the pane is asked each pass and written back by `carry_on`. That is the
+whole of the coupling: `cmd_auto` sets a number and the sidebar's next pass
+sees it, so the key needs no channel to the loop, a `reload` keeps the arm,
+and `tmux show-options -p` answers what a tab is about to do. `-1` is
+without end, which is `C-g A`; pressing it again clears the option, because
+one key that means "not this" beats a third binding.
+
+It fires in the same `DONE_QUIET` branch as the clock, in the `elif not
+when:` arm - that is, only where nothing is waiting on a limit and the agent
+has actually stopped - and last of all in there, since the bookkeeping above
+it is about the turn that ended and this starts the next one.
+
+**The two rails.** The thing to be afraid of is an arm that cannot tell work
+from nothing, typing `continue` at a pane that has exited to a shell every
+few seconds until morning. One rail is the screen: a window that redrew to
+exactly what it was did nothing with the word. The other is the clock, and
+it is the one that catches a line-oriented agent, whose screen *has* changed
+- by the width of the echoed word - and which gives itself away by stopping
+a fifth of a second later; `AUTO_WORKED` is where that line is drawn. Either
+answer takes the count off the pane, not merely out of the loop: a
+stand-down that forgot the option would be read back as a live arm on the
+next pass, which is exactly the bug that shipped first.
+
+`auto_at` is on `time.monotonic()`, like `printed_at`, and not on
+`time.time()` like the clock's `deadline`. Mixed, the difference between
+them is a number in the billions, every turn reads as having achieved
+nothing, and an arm of five spends one - which is how the first version
+behaved.
+
 ## Remembering tabs
 
 `~/.sticky/windows/<session-id>.json` holds one record per tab: the project,
@@ -1322,6 +1644,22 @@ function is where a record becomes a window: `resume_command` for the line,
 conversation has gone. Both ways in go through it - `resume` from a shell
 and `C-g o` from inside the session - so the two cannot come to disagree
 about what reopening a tab means.
+
+**The order a set comes back in.** `known_windows` answers most-recently-seen
+first, which is right for a list you choose from and wrong for putting a set
+back: reopened in that order, a session came back with its tabs shuffled
+into the order they had last been *touched*. `in_tab_order` sorts by the
+`index` a record keeps - written when the tab is made and refreshed by the
+sidebar's minute heartbeat, so moving a tab with tmux's own `swap-window` is
+followed rather than undone - and `cmd_resume` reopens through it. A record
+with no index, which is every record written before this existed, sorts
+after the ones that have one, oldest first.
+
+One trap worth knowing, met while testing this: `open_tab` records the index
+of wherever the tab landed, so a resume that placed a set wrongly then wrote
+that wrong order down as the truth. With the ordering fixed the re-record is
+a no-op, but it means a test has to start from fresh records to measure
+anything - the first run cements whatever it did.
 
 ## Picking one tab to reopen
 

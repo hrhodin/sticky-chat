@@ -322,26 +322,30 @@ class TestEveryNoteIsReachable:
         assert "older 19" in joined, joined
 
 
-class TestTheBandBelow:
-    """Notes whose text is past the bottom edge get a band of their own."""
+class TestWhatIsNotOnARow:
+    """One list, above, for everything you cannot see beside its own line.
 
-    def frame(self, sticky, below=2, height=20, hits=None):
+    There used to be a second band at the foot for notes whose text was
+    further down the pane than the screen reached, with a rule for guessing
+    which side an unplaceable note belonged on and a circular sizing pass
+    between the two bands. The band above was already in the same order, so
+    all of that went.
+    """
+
+    def frame(self, sticky, later=2, height=20, hits=None):
         notes = [placed(2, "here", "on screen")] + [
-            placed(None, f"b{i}", f"later note {i}", where="below",
-                   note={"abs_line": 50 + i}) for i in range(below)]
+            placed(None, f"b{i}", f"later note {i}",
+                   note={"abs_line": 50 + i}) for i in range(later)]
         return [plain(line) for line in
                 sticky.build_frame(notes, 34, height, hits=hits)]
 
-    def test_it_lists_them_at_the_foot(self, sticky):
+    def test_it_lists_them_above(self, sticky):
         frame = self.frame(sticky)
-        assert "- later note 0" in frame[-3]
-        assert "- later note 1" in frame[-2], "nearest first, then downwards"
-
-    def test_it_is_separated_from_the_aligned_part(self, sticky):
-        assert self.frame(sticky)[-4].count("─") > 10
+        joined = "\n".join(frame[:6])
+        assert "later note 0" in joined and "later note 1" in joined, joined
 
     def test_the_aligned_note_keeps_its_row(self, sticky):
-        assert "on screen" in "\n".join(self.frame(sticky)[:4])
+        assert "on screen" in "\n".join(self.frame(sticky))
 
     def test_the_entries_can_be_clicked(self, sticky):
         hits = []
@@ -350,13 +354,20 @@ class TestTheBandBelow:
         assert "later note 0" in frame[rows["b0"]]
         assert not any(hit["onscreen"] for hit in hits if hit["id"] == "b0")
 
-    def test_it_says_how_many_did_not_fit(self, sticky):
-        assert "↓ 6 more" in "\n".join(self.frame(sticky, below=9))
+    def test_the_footer_stops_counting_what_is_below(self, sticky):
+        """There is no below any more. A footer that still said `↓2 below`
+        would be pointing at a band that is not there."""
+        assert "below" not in "\n".join(self.frame(sticky))
 
-    def test_a_short_pane_gets_no_band(self, sticky):
-        frame = self.frame(sticky, height=8)
-        assert not any(line.count("─") > 10 for line in frame)
-        assert "later note 0" not in "\n".join(frame)
+    def test_a_note_past_the_end_of_the_map_is_still_drawn(self, sticky):
+        """A row the sidebar has no room for is a row you cannot see, so it
+        belongs in the list like any other. Left aligned to it, the note was
+        drawn nowhere at all while the footer went on counting it."""
+        hits = []
+        notes = [placed(2, "here", "on screen"),
+                 placed(40, "far", "past the end", note={"abs_line": 40})]
+        sticky.build_frame(notes, 34, 20, hits=hits)
+        assert "far" in {hit["id"] for hit in hits}
 
 
 class TestNotesFromAPaneThatHasGone:
@@ -798,8 +809,16 @@ class TestTypingInTheNotesPane:
             assert sticky.typing_through(key), key
 
     def test_the_sidebar_keeps_the_keys_it_answers_to(self, sticky):
-        for key in "qrhgG?><xFuSst123456789 ":
+        for key in "qrhgG?><xFuSst ":
             assert not sticky.typing_through(key), key
+
+    def test_but_not_the_digits_any_more(self, sticky):
+        """They were its own, and a digit of its own pasted the pending
+        batch into another tab - one press, silent, beside the letters that
+        type. `C-g 1`-`9` sends now, and a digit here types like the rest of
+        the keyboard. See `TestSendingABatchToAnotherTab`."""
+        for key in "123456789":
+            assert sticky.typing_through(key), key
 
     def test_moving_about_is_not_a_sentence(self, sticky):
         """The arrows, the page keys and the wheel are how you get around
@@ -1102,13 +1121,10 @@ class TestUpAndDownInTheNotePrompt:
         assert sticky.row_step(rows, where, 1, 1, None)[0] == 1
 
 
-class TestTheFootBand:
-    """Notes whose text is below the screen get a band at the foot.
-
-    It takes its rows off the bottom of the aligned map, which is where both
-    of these went wrong: a note aligned to a row the band has taken, and a
-    band too short to say how much it is not showing.
-    """
+class TestNoTwoNotesShareARow:
+    """What the foot band kept getting wrong, now that it is gone: a note
+    aligned to a row another note is drawn on, and a note aligned to a row
+    the sidebar has no room for."""
 
     @staticmethod
     def note(nid, abs_line, text):
@@ -1121,15 +1137,15 @@ class TestTheFootBand:
         return {"id": nid, "row": row, "match": "exact",
                 "note": self.note(nid, row, f"note {nid}")}
 
-    def below(self, nid, abs_line):
-        return {"id": nid, "row": None, "where": "below", "match": "exact",
-                "note": self.note(nid, abs_line, f"below {nid}")}
+    def offscreen(self, nid, abs_line):
+        return {"id": nid, "row": None, "match": "offscreen",
+                "note": self.note(nid, abs_line, f"later {nid}")}
 
     def test_no_two_notes_share_a_row(self, sticky):
         placed = [self.aligned("a", 18), self.aligned("b", 20),
                   self.aligned("c", 21),
-                  self.below("d", 40), self.below("e", 41),
-                  self.below("f", 42)]
+                  self.offscreen("d", 40), self.offscreen("e", 41),
+                  self.offscreen("f", 42)]
         hits = []
         sticky.build_frame(placed, 34, 24, 0, hits, 0, None, None)
         rows = {}
@@ -1138,23 +1154,20 @@ class TestTheFootBand:
         clashes = {row: ids for row, ids in rows.items() if len(ids) > 1}
         assert not clashes, f"two notes drawn on one row: {clashes}"
 
-    def test_a_displaced_note_is_listed_rather_than_stacked(self, sticky):
+    def test_every_note_is_drawn_somewhere(self, sticky):
         placed = [self.aligned("a", 18), self.aligned("b", 20),
-                  self.below("d", 40)]
+                  self.offscreen("d", 40)]
         hits = []
         sticky.build_frame(placed, 34, 24, 0, hits, 0, None, None)
-        drawn = {hit["id"] for hit in hits}
-        assert "b" in drawn, "the note the foot band displaced went missing"
+        assert {"a", "b", "d"} <= {hit["id"] for hit in hits}
 
-    @pytest.mark.parametrize("foot_h, count", [(2, 2), (2, 5), (3, 5)])
-    def test_it_always_says_how_many_it_is_hiding(self, sticky, foot_h, count):
-        beneath = [self.below(chr(97 + i), 50 + i) for i in range(count)]
-        out = sticky.foot_lines(beneath, 34, foot_h)
-        assert len(out) <= foot_h
-        listed = sum(1 for line in out if "below" in line)
-        if listed < count:
-            assert any("more" in line for line in out), \
-                "the count is the one line that must survive a trim"
+    def test_the_band_says_how_many_it_is_hiding(self, sticky):
+        """The one line that must survive a trim is the count of what you
+        are not being shown."""
+        placed = [self.offscreen(chr(97 + i), 50 + i) for i in range(30)]
+        out = [plain(line) for line in
+               sticky.build_frame(placed, 34, 12, 0, None, 0, None, None)]
+        assert any("more" in line for line in out), "\n".join(out)
 
 
 class TestClickingANote:

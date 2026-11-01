@@ -61,8 +61,15 @@ SIDEBAR_SETTLE = 0.3        # one more pass after output or a scroll settles
 
 # The keys the sidebar answers to itself. Everything else printable belongs
 # to the agent: see `typing_through`.
+# The digits are deliberately *not* here: in the sidebar a letter it has no
+# use for is forwarded to the agent, so you can start typing at the pane your
+# eye was on - and a digit that was intercepted instead handed the whole
+# pending batch to another tab, silently, with no way back. Typing a message
+# with a `2` in it while the sidebar had focus sent four notes into another
+# conversation. `C-g 1`-`9` does it now, in the sidebar only: see the
+# bindings in `config.py`.
 SIDEBAR_KEYS = frozenset(
-    "qrhgG?><\t\r\n xFuSst\x19\x05123456789")
+    "qrhgG?><\t\r\n xFuSst\x19\x05")
 
 
 # Looking for the id an agent chose for itself: how often, and for how much
@@ -95,6 +102,78 @@ CONTINUE_GRACE = 240.0
 CONTINUE_TRIES = 3
 
 CONTINUE_WORD = "continue"
+
+
+# An agent that stops because it thinks it is finished is the other half of
+# the same wish. The clock above waits out a limit nobody chose; this is a
+# standing instruction, given in advance, to say the same word when a turn
+# ends of its own accord - `C-g a` for five more, `C-g A` for as long as it
+# takes. Five because that is a coffee's worth of work rather than a number
+# anybody has to think about, and it stacks, so twice is ten.
+AUTO_STEP = 5
+
+# What `C-g A` writes down instead of a count.
+AUTO_FOREVER = -1
+
+# How long a turn has to keep printing before the poke that started it counts
+# as having achieved something. A turn that did any work at all prints for
+# seconds; one that only echoed the word back prints for a fifth of one. This
+# is the rail that stops an arm - `C-g A` especially - from typing `continue`
+# at an agent that has exited to a shell, every three seconds, all night. An
+# agent that genuinely finishes in under a second had nothing left to do, so
+# standing the arm down there is the right answer by accident as well.
+AUTO_WORKED = 1.0
+
+
+def say_to(tm: Tmux, pane: str, word: str) -> None:
+    """Type one word at the agent and press Enter.
+
+    Typed rather than pasted: one word needs no buffer, and an agent that
+    folds a paste into a placeholder would fold this too. Copy mode is left
+    first, because somebody scrolled back through the output has a pane
+    where every letter is a motion - which would turn `continue` into eight
+    of them and send nothing.
+    """
+    tm.ok("send-keys", "-X", "-t", pane, "cancel")
+    tm.ok("send-keys", "-t", pane, "-l", word)
+    time.sleep(0.15)                    # let the agent take the word in
+    tm.ok("send-keys", "-t", pane, "Enter")
+
+
+def carry_on(tm: Tmux, pane: str, left: int, screen: str,
+             before: str, worked: bool = True) -> tuple[int, str, str]:
+    """Say the word at an agent that has stopped, if it was asked for.
+
+    Comes back as what is left of the arm, the screen to compare the next
+    stop against, and anything worth saying in the log.
+
+    The two rails are the whole reason this is not three lines, because the
+    thing to be afraid of is an arm that cannot tell work from nothing and
+    types `continue` at an agent which has exited to a shell, every few
+    seconds, for as long as the count allows - which for `C-g A` is for
+    ever. One rail is the screen: an agent whose window redraws to exactly
+    what it was did nothing with the word. The other is the clock, because
+    an agent that only echoes the word back has a screen that *has* changed
+    - by the width of the word - and the thing that gives it away is that it
+    stopped printing a fifth of a second later. Either answer spends the arm
+    rather than the night.
+    """
+    if before and (screen == before or not worked):
+        # Off the pane and not only out of this function. The count on the
+        # pane is what the next pass reads, so a stand-down that forgot it
+        # would be read back as a live arm a second later - which is how an
+        # arm that had given up carried on anyway.
+        tm.ok("set-option", "-p", "-u", "-t", pane, "@sticky_autocontinue")
+        return 0, "", "carrying on achieved nothing: stood down"
+    say_to(tm, pane, CONTINUE_WORD)
+    left = left if left == AUTO_FOREVER else left - 1
+    if left:
+        tm.ok("set-option", "-p", "-t", pane, "@sticky_autocontinue",
+              str(left))
+    else:
+        tm.ok("set-option", "-p", "-u", "-t", pane, "@sticky_autocontinue")
+    said = "without end" if left == AUTO_FOREVER else f"{left} left"
+    return left, screen, f"carried on, {said}"
 
 
 # How much of a diff is worth keeping when the log is on. A whole screen
@@ -190,7 +269,7 @@ def help_sections(agent: Agent = CLAUDE) -> list[tuple[str, list[str]]]:
             "C-s while typing sends too,",
             "  alt-enter sends and enters",
             "C-g u unmarks the last batch",
-            "1-9 send to that tab instead",
+            "C-g 1-9 sends to that tab",
             "t sends later: it asks when",
             "Click the clock row to call it",
             "  off, and again to put it back",
@@ -208,6 +287,11 @@ def help_sections(agent: Agent = CLAUDE) -> list[tuple[str, list[str]]]:
             "C-g C new, tall window",
             "C-g o reopens a closed tab",
             "C-g F forks chat and notes",
+            "C-g B box · C-g b unbox",
+            "C-g k stops what it is running",
+            f"C-g a {AUTO_STEP} more turns · C-g A",
+            f"  for all of them, until {agent.short}",
+            "  is told otherwise (A again)",
         ]),
         ("Leaving", [
             f"C-g d detach \u2014 {agent.short} runs on",
@@ -232,7 +316,7 @@ REASON_EVERY = 30.0
 
 
 def still_limited(agent: Agent, project: str, session: str, screen: str,
-                  saw: str) -> bool:
+                  saw: str, home: str = "") -> bool:
     """Whether what a clock was set for is still true.
 
     An agent that keeps a record is asked again: the newest notice must
@@ -243,7 +327,7 @@ def still_limited(agent: Agent, project: str, session: str, screen: str,
     nobody can explain is not one to throw away on a guess.
     """
     if agent.notice_path:
-        told, itself = limit_notice(agent, project, session)
+        told, itself = limit_notice(agent, project, session, home)
         return bool(told) and not itself
     return not saw or saw in screen
 
@@ -279,9 +363,8 @@ def typing_through(key: str) -> bool:
     return len(key) == 1 and key.isprintable() and key not in SIDEBAR_KEYS
 
 
-def footer_text(placed: list[dict], listed: int = 0,
-                below: int | None = None, due: float = 0.0,
-                saying: str = "") -> str:
+def footer_text(placed: list[dict], listed: int = 0, due: float = 0.0,
+                saying: str = "", auto: int = 0) -> str:
     """The bottom line: what is pending, and what is off screen either way.
 
     How much Claude has printed while you read is *not* here - it is on the
@@ -290,9 +373,6 @@ def footer_text(placed: list[dict], listed: int = 0,
     """
     pending = sum(1 for p in placed if p["note"]["status"] == "pending"
                   and not p["note"].get("deleted"))
-    if below is None:
-        below = sum(1 for p in placed if p["row"] is None
-                    and p.get("where") == "below")
     parts = [f"{pending} pending"]
     if due:
         # The one thing here that is about the future rather than the
@@ -307,10 +387,14 @@ def footer_text(placed: list[dict], listed: int = 0,
         sign = "\u29d7" if saying else "\u21b3"      # a clock, or an arrow
         parts.append(f"{sign} at "
                      f"{time.strftime('%H:%M', time.localtime(due))}")
+    if auto:
+        # Short, because this row is abbreviations - and here at all because
+        # a tab that will start the next turn by itself is a fact about the
+        # tab, not an event, so there is no moment at which to announce it.
+        parts.append("\u21ba\u221e" if auto == AUTO_FOREVER
+                     else f"\u21ba{auto}")
     if listed:
         parts.append(f"\u2191{listed} above")
-    if below:
-        parts.append(f"\u2193{below} below")
     if any(p["note"]["status"] == "committed" for p in placed):
         parts.append("u unmark")
     parts.append("? help")
@@ -331,6 +415,21 @@ def how_long(seconds: float) -> str:
         return f"in {minutes} min"
     hours, minutes = divmod(minutes, 60)
     return f"in {hours}h" if not minutes else f"in {hours}h {minutes}m"
+
+
+def auto_line(auto: int) -> str:
+    """The prominent half of an arm: that this tab will not stop.
+
+    Where a clock has `due_line`, an arm has this. It earns the row for the
+    same reason: the one thing in here that should never come as a surprise
+    is a tab starting a turn while nobody is looking, and an arm does that
+    every time the agent thinks it has finished.
+    """
+    if not auto:
+        return ""
+    if auto == AUTO_FOREVER:
+        return "\u21ba carrying on, until you say otherwise"
+    return f"\u21ba carrying on, {auto} more {'time' if auto == 1 else 'times'}"
 
 
 def due_line(due: float, saying: str, pending: int,
@@ -436,25 +535,34 @@ def history_order(placed: list[dict]) -> list[dict]:
 
 
 def band_window(placed: list[dict], band_h: int, scroll: int,
-                top: int = 0) -> tuple[list[dict], list[dict], int, int,
-                                       list[dict]]:
+                top: int = 0, room: int = 0) -> tuple[list[dict],
+                                                      list[dict], int, int]:
     """Split the notes into the band's list and the row-aligned ones.
 
-    The band lists what is *above* what you can see: notes that scrolled off
-    the top, notes above the viewport when the window is taller than the
-    terminal, and notes sitting under the band itself. Scrolling the sidebar
-    walks that window back through every note ever taken, so the whole
-    history is reachable without touching the Claude pane.
+    A note is drawn on its own row when you can see the line it is about.
+    Everything else is in the band, which lists what is above what you can
+    see: notes that scrolled off the top, notes whose text is further down
+    the pane than the screen reaches, notes above the viewport when the
+    window is taller than the terminal, notes sitting under the band itself,
+    and notes whose row means nothing here at all because they were taken
+    before a resume. Scrolling the band walks back through every note ever
+    taken, so the whole history is reachable without touching the agent's
+    pane.
 
-    What is *below* comes back separately, unwindowed: there are only ever as
-    many of those as the pane has scrolled past, and the foot of the sidebar
-    lists them in its own band.
+    One list, because two were not worth what they cost. `room` is how many
+    rows the aligned map really has: a note past the end of it has nowhere
+    to be drawn, so it belongs in the band like any other note you cannot
+    see - and saying so here is what replaced a band at the foot, a rule for
+    guessing which side of the screen an unplaceable note was on, and a
+    circular sizing pass between the two.
     """
-    listed, aligned, beneath = [], [], []
+    listed, aligned = [], []
     for item in placed:
-        if item["row"] is None:
-            (beneath if item.get("where") == "below" else listed).append(item)
-        elif item["row"] < top + band_h:
+        row = item["row"]
+        # No row at all, a row the band itself is sitting on, or a row past
+        # the end of the map: three ways of not being drawable beside the
+        # line it is about, and one list for all of them.
+        if row is None or row < top + band_h or (room and row >= room):
             listed.append(item)
         else:
             aligned.append(item)
@@ -489,7 +597,7 @@ def band_window(placed: list[dict], band_h: int, scroll: int,
     # its own row - the same note twice, each with its own button.
     stop = max(0, anchor - scroll)
     window = history[max(0, stop - capacity):stop]
-    return window, aligned, scroll, len(listed), beneath
+    return window, aligned, scroll, len(listed)
 
 
 def note_bullet(note: dict) -> str:
@@ -542,50 +650,12 @@ def band_lines(window: list[dict], hidden: int, width: int, band_h: int,
     return out
 
 
-def foot_lines(beneath: list[dict], width: int, foot_h: int,
-               hits: list | None = None, base: int = 0,
-               cursor: str | None = None) -> list[str]:
-    """The mirror of the band, for the notes whose text is below the screen.
-
-    Same entries and the same button, under a rule of their own, ordered
-    nearest first so the note just past the bottom edge is the one you reach
-    first. There is no window to scroll here: what is below is only ever what
-    the pane has not caught up with yet.
-    """
-    text_w = max(4, width - 2)
-    rule = "\u2500" * width
-    out = [f"{DIM}{rule}{RESET}"]
-    room = max(4, close_column(width) - 4)      # " - ", the text, then a gap
-    order = history_order(beneath)
-    # The rule always costs a row, and the "N more" line costs another when
-    # there is something for it to say. Work that out before drawing rather
-    # than trimming afterwards: a trim takes the count off the end, which is
-    # the one line that says what you are not being shown.
-    capacity = max(0, foot_h - 1)
-    if len(order) > capacity:
-        capacity = max(0, foot_h - 2)
-    for item in order[:capacity]:
-        note = item["note"]
-        text = note["note"].strip() or "(no text)"
-        mark = REVERSE if item["id"] == cursor else ""
-        out.append(with_close(f"{note_style(note)}{mark} {note_bullet(note)} "
-                              f"{truncate(text, room)}{RESET}", width,
-                              item["id"] == cursor))
-        if hits is not None:
-            hits.append({"row": base + len(out) - 1, "id": item["id"],
-                         "x": close_column(width), "onscreen": False})
-    hidden = max(0, len(order) - capacity)
-    if hidden:
-        tail = f"\u2193 {hidden} more"
-        out.append(f"{COL_FOOTER} {truncate(tail, text_w)}{RESET}")
-    return out[:foot_h]
-
-
 def build_frame(placed: list[dict], width: int, height: int,
                 scroll: int = 0, hits: list | None = None,
                 top: int = 0, hint: str | None = None,
                 cursor: str | None = None, due: float = 0.0,
-                saying: str = "", struck: bool = False) -> list[str]:
+                saying: str = "", struck: bool = False,
+                auto: int = 0) -> list[str]:
     """One rendered line per sidebar row, aligned with the Claude pane.
 
     A note keeps the row its text is on, so the aligned part is drawn in
@@ -596,64 +666,33 @@ def build_frame(placed: list[dict], width: int, height: int,
     """
     pending = sum(1 for p in placed if p["note"]["status"] == "pending"
                   and not p["note"].get("deleted"))
-    coming = due_line(due, saying, pending, struck)
+    # A clock first where there is one: it has a time in it, and the arm it
+    # would hide is still on the footer.
+    coming = due_line(due, saying, pending, struck) or auto_line(auto)
     body_h = max(1, height - (2 if hint else 1) - (1 if coming else 0))
     text_w = width - 2
     top = max(0, min(top, body_h - 1))
     view_h = body_h - top
 
     band_h = max(3, view_h * BAND_SHARE // 100) if view_h >= 10 else 0
-    window, aligned, scroll, listed, beneath = band_window(
-        placed, band_h, scroll, top)
+    window, aligned, scroll, listed = band_window(
+        placed, band_h, scroll, top, body_h)
     if band_h:
         # Shrink to what the list actually needs; every row saved is a row
         # the aligned map gets back. Never below what holds every entry.
         wanted = listed + 1 + (1 if scroll else 0)
         if wanted < band_h:
             band_h = max(2, wanted)
-            window, aligned, scroll, listed, beneath = band_window(
-                placed, band_h, scroll, top)
+            window, aligned, scroll, listed = band_window(
+                placed, band_h, scroll, top, body_h)
     if band_h and not window and not scroll:
         band_h = 0                      # nothing above: give the rows back
-        window, aligned, scroll, listed, beneath = band_window(
-            placed, 0, 0, top)
+        window, aligned, scroll, listed = band_window(
+            placed, 0, 0, top, body_h)
 
-    # The notes below the screen get a band of their own at the foot, so they
-    # are reachable without scrolling the Claude pane to find them. It takes
-    # its rows from the map, never from the band above, and only as many as
-    # it has entries for - two rows of map are the least worth leaving.
-    # The foot band takes its rows off the bottom of the map, so a note
-    # aligned to one of them has nowhere left to sit. Clamping it to the last
-    # row of the map stacks notes on one line; leaving it past the end draws
-    # it nowhere at all, with no way to click it and no way to reach it -
-    # while the footer goes on counting it. Below the map is what the band is
-    # for, so that is where such a note goes.
-    #
-    # Which is circular: the band is sized by how many notes are below, and
-    # which notes are below depends on how many rows the band took. Settling
-    # it takes two passes at most - a band that grows can only push more
-    # notes into itself, and it stops growing when it has room for them.
-    def band_for(below: list[dict]) -> int:
-        if not below or view_h < 10:
-            return 0
-        spare = body_h - (top + band_h) - 2
-        if spare <= 1:
-            return 0
-        return min(len(below) + 1, spare, max(2, view_h * BAND_SHARE // 100))
-
-    foot_h = band_for(beneath)
-    for _ in range(3):
-        displaced = [item for item in aligned if item["row"] >= body_h - foot_h]
-        settled = band_for(beneath + displaced)
-        if settled == foot_h:
-            break
-        foot_h = settled
-    map_h = body_h - foot_h
-    displaced = [item for item in aligned if item["row"] >= map_h]
-    if displaced:
-        aligned = [item for item in aligned if item["row"] < map_h]
-        beneath = beneath + displaced
-
+    # Every row of the body is the map's: there is no band at the foot to
+    # take any, and a note the map has no row for is in the band above.
+    map_h = body_h
     grid: list[str] = [""] * body_h
     claimed = [False] * body_h
     if band_h:
@@ -759,12 +798,6 @@ def build_frame(placed: list[dict], width: int, height: int,
                              "x": close_column(width) if button
                              else 10 ** 6})
 
-    if foot_h:
-        for index, line in enumerate(
-                foot_lines(beneath, width, foot_h, hits, map_h, cursor)):
-            grid[map_h + index] = line
-            claimed[map_h + index] = True
-
     frame = [line if line else "" for line in grid]
     if coming:
         if hits is not None:
@@ -780,7 +813,7 @@ def build_frame(placed: list[dict], width: int, height: int,
     # What the band below actually holds, which is not what `placed` says:
     # a note whose row the band took is listed there too.
     frame.append(f"{COL_FOOTER}"
-                 f"{truncate(footer_text(placed, listed, len(beneath), due, saying), width)}"
+                 f"{truncate(footer_text(placed, listed, due, saying, auto), width)}"
                  f"{RESET}")
     return frame
 
@@ -819,6 +852,19 @@ def cmd_sidebar(args) -> int:
     # where the agent chose its own.
     agent_session = tm.option(pane, "@sticky_agent_session") or session_id
     agent = agent_of(tm, pane)         # whose output this pane is drawing
+
+    def agent_home() -> str:
+        """Where this agent keeps what it writes down.
+
+        Empty for a tab on this machine, where it is the home we are already
+        in; a directory of ours for one in a container, whose home is a bind
+        mount on this disk - so a transcript is a file either way and
+        nothing below has to know which. Asked each time rather than held,
+        because `C-g B` moves a running tab from one to the other and the
+        answer has to be the one that is true now. Every caller is on a path
+        that runs seconds apart at most, never per frame.
+        """
+        return tm.option(pane, "@sticky_home")
     # The mark is set when a tab is made, so a tab older than this code has
     # none. Setting it here too means `reload` is enough to bring one up to
     # date, rather than closing tabs to get a stripe in the status line.
@@ -843,7 +889,31 @@ def cmd_sidebar(args) -> int:
     # Give up on a tab that is already older than the window: a sidebar
     # restarted by `reload` hours later would otherwise adopt whichever
     # conversation happens to be the newest on the machine.
-    hunting = bool(launched) and time.time() - launched < DISCOVER_WINDOW
+    began = time.time()
+
+    def still_hunting(found: str = "") -> bool:
+        """Whether to keep asking what the agent calls this conversation.
+
+        A tab whose agent chose its own id is asked for a minute after it
+        started, and no longer: a sidebar restarted by `reload` hours later
+        would otherwise adopt whichever conversation is newest on the
+        machine.
+
+        A profile that forks its transcript on resume is asked for a minute
+        after *this sidebar* started as well, because that question is an
+        exact one - which file carries our id - and cannot adopt the wrong
+        conversation. It is also the only way a tab that was already running
+        when this arrived ever learns the id it has really been using since
+        it was last reopened.
+        """
+        if found:
+            return False
+        now = time.time()
+        if launched and now - launched < DISCOVER_WINDOW:
+            return True
+        return agent.forks_on_resume and now - began < DISCOVER_WINDOW
+
+    hunting = still_hunting()
     look_again = 0.0                   # monotonic; the first pass looks
     tm.ok("set-option", "-p", "-t", pane, "@sticky_sidebar_pid", str(os.getpid()))
     if self_pane:
@@ -931,6 +1001,12 @@ def cmd_sidebar(args) -> int:
     armed_saw = without_animation(
         tm.option(pane, "@sticky_continue_saw") or "").strip()[:60]
     reasoned = 0.0
+    # The screen the last `continue` of an arm's was typed at. A stop whose
+    # screen is that one again is a poke that achieved nothing - see
+    # `carry_on` - and a sidebar that has only just started has no such
+    # screen, which costs one extra poke and never a wrong one.
+    auto_saw = ""
+    auto_at = 0.0                      # ... and when, by `now`'s clock
     ours = False                       # whether this turn is the clock's own
     last_pass = 0.0                    # when a full pass last cost tmux calls
     replace = True                     # ... and whether that is due again
@@ -953,7 +1029,8 @@ def cmd_sidebar(args) -> int:
                     alive, raw, view = tm.formats(
                         (pane, "#{pane_id}\t#{pane_in_mode}\t#{window_active}"
                          "\t#{@sticky_send_at}\t#{@sticky_send_at_off}"
-                         "\t#{@sticky_log}\t#{pane_width}x#{pane_height}"),
+                         "\t#{@sticky_log}\t#{pane_width}x#{pane_height}"
+                         "\t#{@sticky_autocontinue}"),
                         (self_pane, "#{pane_in_mode}\t#{window_offset_y}"),
                         (pane, VIEW_FORMAT))
                     mode, _, offset = raw.partition("\t")
@@ -962,7 +1039,8 @@ def cmd_sidebar(args) -> int:
                     alive, view = tm.formats(
                         (pane, "#{pane_id}\t#{pane_in_mode}\t#{window_active}"
                          "\t#{@sticky_send_at}\t#{@sticky_send_at_off}"
-                         "\t#{@sticky_log}\t#{pane_width}x#{pane_height}"),
+                         "\t#{@sticky_log}\t#{pane_width}x#{pane_height}"
+                         "\t#{@sticky_autocontinue}"),
                         (pane, VIEW_FORMAT))
             except RuntimeError:
                 break              # before 3.8, asking about a gone pane errors
@@ -972,7 +1050,16 @@ def cmd_sidebar(args) -> int:
             due, _, stood = due.partition("\t")
             stood, _, logging = stood.partition("\t")
             logging, _, size = logging.partition("\t")
+            size, _, armed = size.partition("\t")
             logging, size = logging.strip(), size.strip()
+            # Asked for in advance: how many more times this tab should say
+            # `continue` when the agent stops of its own accord. Read every
+            # pass rather than held, because `C-g a` is pressed while this
+            # loop is running and the option is the only thing both ends
+            # share. `carry_on` writes it back, so the count that comes back
+            # next pass is the one it left.
+            armed = armed.strip()
+            auto = int(armed) if armed.lstrip("-").isdigit() else 0
             # `<when>:<tab>:<what>`. With nothing to say it is the pending
             # notes that go; with a word, that word - the two want the same
             # clock, the same footer and the same way of being called off.
@@ -1139,7 +1226,8 @@ def cmd_sidebar(args) -> int:
                 # keys should not be a way to stop hearing about it.
                 coming = due_line(showing, saying, sum(
                     1 for p in placed if p["note"]["status"] == "pending"
-                    and not p["note"].get("deleted")), struck)
+                    and not p["note"].get("deleted")), struck) \
+                    or auto_line(auto)
                 frame = ([""] * top
                          + build_help(width, height - top - bool(coming),
                                       agent))
@@ -1149,7 +1237,7 @@ def cmd_sidebar(args) -> int:
                     frame.append(
                         f"{COL_PENDING}{truncate(coming, width)}{RESET}")
                 frame.append(f"{COL_FOOTER}"
-                             f"{truncate(footer_text(placed, due=deadline, saying=saying), width)}"
+                             f"{truncate(footer_text(placed, due=deadline, saying=saying, auto=auto), width)}"
                              f"{RESET}")
             else:
                 # Beginners need telling how to send; once nothing is
@@ -1165,7 +1253,7 @@ def cmd_sidebar(args) -> int:
                     hits.clear()
                     frame = build_frame(placed, width, height, scroll, hits,
                                         top, hint, cursor, showing, saying,
-                                        struck)
+                                        struck, auto)
                     shown = [h["id"] for h in hits]
                     if cursor is None or cursor in shown or not shown:
                         break
@@ -1218,7 +1306,8 @@ def cmd_sidebar(args) -> int:
                     # notice says the agent will carry on by itself, which
                     # Claude Code now does, there is nothing for a clock of
                     # ours to do but poke a conversation already coming back.
-                    told, itself = limit_notice(agent, project, agent_session)
+                    told, itself = limit_notice(agent, project,
+                                                agent_session, agent_home())
                     if itself:
                         said, saw = "", ""
                     elif told:
@@ -1302,6 +1391,33 @@ def cmd_sidebar(args) -> int:
                                   "@sticky_continue_tries")
                             tm.ok("set-option", "-p", "-u", "-t", pane,
                                   "@sticky_continue_saw")
+                        if auto:
+                            # Nothing is waiting on a limit and the agent has
+                            # stopped, so this is the stop somebody armed for.
+                            # Last of all in here: the bookkeeping above is
+                            # about the turn that just ended, and this starts
+                            # the next one.
+                            #
+                            # How long the turn we started kept printing,
+                            # which is what tells a turn of work from a word
+                            # echoed back at us. Unarmed until we have poked
+                            # once, because the first stop is somebody's own
+                            # turn ending and there is nothing to judge.
+                            worked = (not auto_at
+                                      or printed_at - auto_at >= AUTO_WORKED)
+                            auto, auto_saw, why_auto = carry_on(
+                                tm, pane, auto, last_screen or "", auto_saw,
+                                worked)
+                            ours = bool(auto_saw)
+                            # On the same clock as `printed_at`, which is
+                            # the one thing this is ever compared with.
+                            # Mixed with `time.time()` the difference is a
+                            # number in the billions, every turn reads as
+                            # having achieved nothing, and an arm of five
+                            # spends one.
+                            auto_at = now if auto_saw else 0.0
+                            if logging and why_auto:
+                                to_log(logging, pane, size, why_auto)
                 if not said_done and not watching and settled:
                     tm.ok("set-option", "-w", "-t", pane, "@sticky_done", "1")
                     said_done = True
@@ -1326,7 +1442,8 @@ def cmd_sidebar(args) -> int:
                     and now - reasoned >= REASON_EVERY):
                 reasoned = now
                 if not still_limited(agent, project, agent_session,
-                                     last_screen or "", armed_saw):
+                                     last_screen or "", armed_saw,
+                                     agent_home()):
                     deadline, saying, armed_saw = 0.0, "", ""
                     tm.ok("set-option", "-p", "-u", "-t", pane,
                           "@sticky_send_at")
@@ -1344,12 +1461,7 @@ def cmd_sidebar(args) -> int:
                 tm.ok("set-option", "-p", "-u", "-t", pane, "@sticky_send_at")
                 tm.ok("set-option", "-w", "-u", "-t", pane, "@sticky_waiting")
                 if saying:
-                    # Typed rather than pasted: one word needs no buffer,
-                    # and an agent that folds a paste into a placeholder
-                    # would fold this too.
-                    tm.ok("send-keys", "-t", pane, "-l", saying)
-                    time.sleep(0.15)      # let the agent take the word in
-                    tm.ok("send-keys", "-t", pane, "Enter")
+                    say_to(tm, pane, saying)
                     ours = True           # the turn this starts is not a
                     #                       person's, so it spends no strike
                 else:
@@ -1359,13 +1471,23 @@ def cmd_sidebar(args) -> int:
                 last_sig = None
 
             if session_id and now - touched > 60:
-                record_window(session_id)     # still open, as of now
+                # Still open, as of now - and where it is sitting, so that a
+                # set put back by `resume` comes back in the order it sat in.
+                # Asked here rather than held from the start because a tab
+                # can be moved: tmux's own `swap-window` renumbers it, and
+                # the record should follow rather than send it back to where
+                # it was opened a week ago. One format a minute, per tab.
+                seat = tm.fmt(pane, "#{window_index}").strip()
+                record_window(session_id,
+                              **({"index": int(seat)} if seat.isdigit()
+                                 else {}))
                 touched = now
             if hunting and now >= look_again:
                 # One glob and one first line, a few seconds apart. Off the
                 # hot path on purpose: it runs after the frame is on screen,
                 # never before one is drawn.
-                found = discover_session(agent, launched, project=project)
+                found = discover_session(agent, launched, agent_home(),
+                                         project=project, named=agent_session)
                 if found:
                     # Only the window record, and only in a field of its
                     # own. The notes stay in the `tab-` directory they were
@@ -1376,8 +1498,7 @@ def cmd_sidebar(args) -> int:
                     tm.ok("set-option", "-p", "-t", pane,
                           "@sticky_agent_session", found)
                     agent_session = found
-                hunting = (not found
-                           and time.time() - launched < DISCOVER_WINDOW)
+                hunting = still_hunting(found)
                 look_again = now + DISCOVER_EVERY
             # Nothing is on a clock, bar the minute above. tmux says when
             # Claude has printed (`pane-activity` sends a byte here), when a
@@ -1560,15 +1681,7 @@ def cmd_sidebar(args) -> int:
                     tm.ok("select-pane", "-t", pane)
                     tm.ok("send-keys", "-t", pane, "-l", key)
                     continue
-                if key.isdigit() and key != "0":
-                    # The numbers on the status line are the tabs, so they
-                    # are the numbers to press: 2 hands what is pending to
-                    # whatever is running in tab 2. Notes taken while
-                    # reading a shell belong to whichever agent should see
-                    # them, and that is rarely the pane they were read in.
-                    run("commit", "--to-tab", key)
-                    last_mtime = -1.0
-                    last_sig = None
+
     except KeyboardInterrupt:
         pass
     finally:
