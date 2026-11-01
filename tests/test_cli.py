@@ -2555,3 +2555,196 @@ class TestTheDismissingClick:
     def test_a_server_that_has_never_dismissed_one(self, sticky):
         assert not sticky.dismissing(self.FakeTmux(roles="claude\nsidebar\n"),
                                      "%1")
+
+
+class TestStartAsksWhatItWasNotTold:
+    """`sticky-chat start` answered two of a tab's three questions in
+    silence: the agent was claude whatever else was installed, and the fence
+    was whatever the choice file said. It asks them now - the new-tab
+    prompt's own lines, through the same code, with whatever the command line
+    already answered printed where it would have been asked.
+
+    The gate is tested as a function of its own because the interesting part
+    is which invocations are *not* asked: a key binding through `run-shell`,
+    a login item, a script, and anybody who said both answers up front.
+    """
+
+    def args(self, **fields):
+        return argparse.Namespace(**{"ask_here": False, "no_ask": False,
+                                     "agent": None, "agent_cmd": None,
+                                     "sandbox": None, **fields})
+
+    def test_a_terminal_with_nothing_said_gets_asked(self, sticky):
+        assert sticky.start_asks(self.args(), True) is True
+
+    def test_without_a_terminal_nothing_is_asked(self, sticky):
+        """`prompt_line` needs a tty to go raw on, and this is the path a
+        key binding, a login item and a script all take."""
+        assert sticky.start_asks(self.args(), False) is False
+
+    def test_both_answers_given_leaves_nothing_to_ask(self, sticky):
+        assert sticky.start_asks(
+            self.args(agent="codex", sandbox="off"), True) is False
+
+    def test_one_answer_given_still_asks_the_other(self, sticky):
+        assert sticky.start_asks(self.args(agent="codex"), True) is True
+        assert sticky.start_asks(self.args(sandbox="off"), True) is True
+
+    def test_a_command_of_your_own_answers_the_agent_line(self, sticky):
+        """`--agent-cmd` is a more specific answer than a profile name, so
+        the agent line has nothing left to ask - the fence still does."""
+        assert sticky.start_asks(
+            self.args(agent_cmd="weird --thing"), True) is True
+        assert sticky.start_asks(
+            self.args(agent_cmd="weird --thing", sandbox="off"),
+            True) is False
+
+    def test_no_ask_is_the_silence_it_used_to_be(self, sticky):
+        assert sticky.start_asks(self.args(no_ask=True), True) is False
+
+    def test_the_floating_prompt_asks_whatever_it_is_handed(self, sticky):
+        """`--ask-here` is what `C-g c` runs in a pane of its own, and it
+        asks about the project as well."""
+        assert sticky.start_asks(
+            self.args(ask_here=True, agent="codex", sandbox="off"),
+            True) is True
+        assert sticky.start_asks(self.args(ask_here=True), False) is True
+
+    def asked(self, sticky, monkeypatch, tmp_path, *replies):
+        """The prompt's lines, answered in order; returns what it asked."""
+        lines = []
+
+        def prompt_line(prompt, initial="", **_):
+            lines.append((prompt.strip(), initial))
+            return replies[len(lines) - 1]
+
+        monkeypatch.setattr(sticky.commands, "prompt_line", prompt_line)
+        monkeypatch.setattr(sticky.commands, "installed_agents",
+                            lambda: [sticky.CLAUDE, sticky.SHELL])
+        monkeypatch.setattr(sticky.commands, "warm_up", lambda: None)
+        # No engine is asked anything, and nothing is written into the state
+        # directory you are using: answering the fence line remembers it.
+        monkeypatch.setattr(sticky.commands, "unavailable", lambda fence: "")
+        monkeypatch.setattr(sticky.sandbox, "STATE_HOME",
+                            str(tmp_path / "state"))
+        return lines
+
+    def test_the_path_you_typed_is_not_asked_about_again(
+            self, sticky, monkeypatch, tmp_path, capsys):
+        lines = self.asked(sticky, monkeypatch, tmp_path, ("save", "shell"))
+        got = sticky.ask_project(None, None, str(tmp_path),
+                                 ask_where=False, fence="off")
+        assert got == (str(tmp_path), "shell", "off")
+        assert [prompt for prompt, _ in lines] == ["agent>"]
+        said = capsys.readouterr().out
+        assert f"project> {tmp_path}" in said, "printed where it was not asked"
+        assert "sandbox> off" in said
+
+    def test_a_path_that_is_not_there_is_asked_about(self, sticky,
+                                                     monkeypatch, tmp_path):
+        """Even off the command line: a line with the path still on it is
+        how a typo gets fixed, and dying would mean retyping the lot."""
+        good = tmp_path / "here"
+        good.mkdir()
+        lines = self.asked(sticky, monkeypatch, tmp_path,
+                           ("save", str(good)), ("save", "shell"))
+        got = sticky.ask_project(None, None, str(tmp_path / "nope"),
+                                 ask_where=False, fence="off")
+        assert got == (str(good), "shell", "off")
+        assert [prompt for prompt, _ in lines] == ["project>", "agent>"]
+
+    def test_the_agent_you_named_is_not_asked_about(self, sticky, monkeypatch,
+                                                    tmp_path, capsys):
+        lines = self.asked(sticky, monkeypatch, tmp_path, ("save", "docker"))
+        got = sticky.ask_project(None, None, str(tmp_path),
+                                 ask_where=False, agent="codex")
+        assert got == (str(tmp_path), "codex", "docker")
+        assert [prompt for prompt, _ in lines] == ["sandbox>"]
+        assert "agent>   codex" in capsys.readouterr().out
+
+    def test_enter_on_the_agent_line_takes_what_is_on_it(self, sticky,
+                                                         monkeypatch,
+                                                         tmp_path):
+        """Which is the whole of why this is cheap: the common case is the
+        keystrokes it always was."""
+        self.asked(sticky, monkeypatch, tmp_path, ("save", ""))
+        got = sticky.ask_project(None, None, str(tmp_path),
+                                 ask_where=False, fence="off")
+        assert got[1] == "claude"
+
+    def test_a_name_that_is_not_an_agent_is_asked_again(self, sticky,
+                                                        monkeypatch,
+                                                        tmp_path, capsys):
+        lines = self.asked(sticky, monkeypatch, tmp_path,
+                           ("save", "gemeni"), ("save", "gemini"))
+        got = sticky.ask_project(None, None, str(tmp_path),
+                                 ask_where=False, fence="off")
+        assert got[1] == "gemini"
+        assert len(lines) == 2, "the line came back with the typo on it"
+        assert "no such agent: gemeni" in capsys.readouterr().out
+
+    def test_escape_on_any_line_cancels_the_whole_thing(self, sticky,
+                                                        monkeypatch,
+                                                        tmp_path):
+        """Three values back, every time. Unpacking is what the caller does
+        with the answer, and a cancel that returned two of them raised
+        ValueError instead of opening nothing."""
+        for where, replies in (
+                ("project", (("cancel", ""),)),
+                ("agent", (("save", str(tmp_path)), ("cancel", ""))),
+        ):
+            self.asked(sticky, monkeypatch, tmp_path, *replies)
+            got = sticky.ask_project(None, None, str(tmp_path / "nope"),
+                                     ask_where=False, fence="off")
+            assert got == ("", "", ""), f"cancelled at the {where} line"
+
+
+class TestWhenTmuxWillNotStart:
+    """Two things that made the same remote machine look broken.
+
+    A terminal whose terminfo ships with the terminal - Ghostty, kitty,
+    WezTerm - leaves `$TERM` naming an entry the machine you ssh into does
+    not have, and tmux will not start without one. And the shortcut a bare
+    `sticky-chat` takes when the last tabs are worth offering reached
+    `cmd_resume` outside the handler, so that refusal arrived as a traceback
+    through four frames of ours.
+    """
+
+    def test_a_terminal_tmux_does_not_know_says_what_to_do(self, sticky,
+                                                           monkeypatch):
+        monkeypatch.setenv("TERM", "xterm-ghostty")
+        said = sticky.tmux.why("missing or unsuitable terminal: xterm-ghostty")
+        assert "infocmp -x xterm-ghostty" in said, "copy the entry over"
+        assert "TERM=xterm-256color" in said, "or use one that is there"
+
+    def test_every_other_failure_is_left_as_it_was(self, sticky):
+        assert sticky.tmux.why("no server running on /tmp/sticky") == ""
+        assert sticky.tmux.why("can't find window: 9") == ""
+
+    def test_the_hint_rides_along_on_the_error(self, sticky, monkeypatch):
+        """Which is what the shortcuts print: one line of tmux's own words,
+        then what to do about them."""
+        monkeypatch.setenv("TERM", "xterm-ghostty")
+
+        class Done:
+            returncode = 1
+            stdout = ""
+            stderr = "missing or unsuitable terminal: xterm-ghostty"
+
+        monkeypatch.setattr(sticky.tmux.subprocess, "run",
+                            lambda *a, **k: Done())
+        with pytest.raises(RuntimeError) as raised:
+            sticky.Tmux("/tmp/none").run("new-session", "-d")
+        assert "no terminfo entry" in str(raised.value)
+
+    def test_a_refusal_is_a_message_and_not_a_traceback(self, sticky):
+        """`guarded` is what every dispatch goes through now."""
+        def boom(_args):
+            raise RuntimeError("tmux new-session: missing or unsuitable "
+                               "terminal: xterm-ghostty")
+
+        with pytest.raises(SystemExit):
+            sticky.guarded(boom, argparse.Namespace())
+
+    def test_what_a_subcommand_returns_comes_back(self, sticky):
+        assert sticky.guarded(lambda _args: 3, argparse.Namespace()) == 3

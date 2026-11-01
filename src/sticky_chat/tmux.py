@@ -19,6 +19,28 @@ SESSION_NAME = "sticky"
 # --------------------------------------------------------------------- tmux
 
 
+def why(said: str) -> str:
+    """What to do about it, for the tmux errors that have one answer.
+
+    Only the ones where the message names a cause the user cannot be
+    expected to connect to a fix. "missing or unsuitable terminal" is the
+    one that comes up: tmux will not start without a terminfo entry for
+    $TERM, and a terminal whose entry ships with the terminal - Ghostty,
+    kitty, WezTerm - has none on the machine you just ssh'd into. The
+    message on its own reads as "tmux is broken here", which is why this
+    says the two ways out instead.
+    """
+    if "missing or unsuitable terminal" not in said:
+        return ""
+    term = os.environ.get("TERM", "")
+    return (f"\n  this machine has no terminfo entry for {term or 'your TERM'}"
+            f", which tmux needs before it will start. Either copy it over "
+            f"from the machine you connected from:\n"
+            f"    infocmp -x {term} | ssh THIS-HOST -- tic -x -\n"
+            f"  or run sticky with one this machine already has:\n"
+            f"    TERM=xterm-256color sticky-chat ...")
+
+
 class Tmux:
     def __init__(self, socket: str | None = None):
         self.socket = socket or os.environ.get("STICKY_SOCKET") or DEFAULT_SOCKET
@@ -45,8 +67,8 @@ class Tmux:
                 "`dnf install tmux`; sticky-chat drives it and cannot "
                 "run without it.")
         if check and proc.returncode != 0:
-            raise RuntimeError(
-                f"tmux {' '.join(args)}: {proc.stderr.strip() or proc.returncode}")
+            said = proc.stderr.strip() or str(proc.returncode)
+            raise RuntimeError(f"tmux {' '.join(args)}: {said}{why(said)}")
         return proc.stdout
 
     def ok(self, *args: str) -> bool:

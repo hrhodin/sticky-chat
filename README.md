@@ -50,6 +50,21 @@ If tmux is missing: `brew install tmux` on macOS, `apt install tmux` or
 `wl-copy`, `xclip` or `xsel`, whichever is present; without one the copy
 keys fill tmux's own paste buffer instead.
 
+**Over ssh**, tmux needs a terminfo entry for your `$TERM` before it will
+start, and a terminal that ships its own — Ghostty, kitty, WezTerm — has none
+on the machine you just connected to: every sticky command then fails with
+`missing or unsuitable terminal: xterm-ghostty`. Copy the entry over once,
+from the machine the terminal runs on:
+
+```sh
+infocmp -x xterm-ghostty | ssh that-host -- tic -x -
+```
+
+or run with one the remote already has — `TERM=xterm-256color sticky-chat
+…`. Ghostty can also do the copying itself, with
+`shell-integration-features = ssh-env,ssh-terminfo` in its config. Sticky
+says all of this when tmux refuses for that reason.
+
 ## Install
 
 ```sh
@@ -92,9 +107,26 @@ and `~/.sticky`, which holds the generated config and your notes.
 sticky-chat start ~/my-project
 ```
 
-That opens one tmux window: the chat pane on the left, the notes sidebar
-on the right, 34 columns wide. Drag over something the agent printed, type
-a note, press `C-g s` to send every pending note back to the agent.
+It asks two things first — which agent, and what fences it — each on a line
+pre-typed with the answer you most likely want, so Enter Enter is the usual
+way through:
+
+```
+project> ~/my-project
+agent>   claude
+sandbox> off
+```
+
+The path is printed rather than asked, because you just typed it. Then one
+tmux window opens: the chat pane on the left, the notes sidebar on the
+right, 34 columns wide. Drag over something the agent printed, type a note,
+press `C-g s` to send every pending note back to the agent.
+
+Answering on the command line skips the line: `--agent codex` settles the
+second, `--sandbox docker` the third, both of them together asks nothing.
+`--no-ask` takes the defaults in silence, which is what a script wants — and
+without a terminal to ask at, nothing is asked anyway, so a key binding and
+a login item behave as they always did.
 
 ```sh
 sticky-chat start ~/my-project -- --dangerously-skip-permissions
@@ -108,10 +140,11 @@ the directory: a second tab on the same project opens an empty sidebar, and
 resuming a tab brings its own notes back. `C-g z` zooms the chat pane to
 full width; the sidebar keeps running behind it.
 
-`C-g c` asks for the project in a prompt, starting from the directory the
-pane is in. **Tab** completes directory names - once if there is only one,
-listing the choices if there are several - and a path that does not exist
-is said so with what you typed still on the line to correct. Esc cancels.
+`C-g c` asks the same three questions in a pane of its own, the project line
+included, starting from the directory the pane is in. **Tab** completes —
+directory names, agent names, fence names — once if there is only one,
+listing the choices if there are several, and a path that does not exist is
+said so with what you typed still on the line to correct. Esc cancels.
 
 ### Another agent
 
@@ -678,8 +711,9 @@ read every file you own, change them, delete them. A tab can put a fence
 around it, and the fence does not get in sticky's way — sticky reads the
 *terminal*, not the agent, so a fenced agent still gets its notes taken.
 
-The prompt that opens a tab (`C-g c`) asks for it on the third line, under
-the project and the agent:
+Every way of opening a tab asks for it: `C-g c` on the third line, under the
+project and the agent, and `sticky-chat start` on the same line with the
+project already settled.
 
 ```
 project> ~/Code/thing

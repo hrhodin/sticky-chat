@@ -53,7 +53,14 @@ from .agents import (
     transcript_slug,
     unix_time,
 )
-from .cli import GLOBAL_FLAGS, OUR_FLAGS, build_parser, main, split_our_flags
+from .cli import (
+    GLOBAL_FLAGS,
+    OUR_FLAGS,
+    build_parser,
+    guarded,
+    main,
+    split_our_flags,
+)
 from .clipboard import clipboard_command, to_clipboard
 from .commands import (
     DISMISS_GRACE,
@@ -63,6 +70,7 @@ from .commands import (
     YEAR,
     ago,
     ask,
+    ask_agent,
     ask_project,
     ask_when,
     attach,
@@ -118,7 +126,9 @@ from .commands import (
     resume_command,
     run_summary,
     running_under,
+    said_line,
     sidebar_pid,
+    start_asks,
     tab_name,
     tab_row,
     tell,

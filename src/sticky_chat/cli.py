@@ -80,7 +80,8 @@ def build_parser() -> argparse.ArgumentParser:
                        help="give the agent a window the size of the "
                             "terminal")
         p.add_argument("--agent", help="which agent profile to start on: "
-                                       f"{agent_choices()}")
+                                       f"{agent_choices()}; asked on a "
+                                       "terminal when it is not given")
         p.add_argument("--agent-cmd", metavar="CMD",
                        help="the command to run, instead of the profile's")
         p.add_argument("--sandbox", metavar="HOW",
@@ -103,6 +104,9 @@ def build_parser() -> argparse.ArgumentParser:
                        help="ask for the project in a prompt, Tab completes")
         p.add_argument("--ask-here", action="store_true",
                        help="ask on this terminal: what the prompt runs")
+        p.add_argument("--no-ask", action="store_true",
+                       help="do not ask which agent or fence; take the "
+                            "defaults, which is what a script wants")
         p.add_argument("--menus", action="store_true",
                        help="let the agent open multiple-choice question "
                             "menus")
@@ -346,7 +350,7 @@ OUR_FLAGS = {"--sidebar-width": 1, "--agent-cmd": 1,
              "--agent": 1, "--socket": 1, "--sandbox": 1,
              "--sandbox-image": 1, "--sandbox-arg": 1,
              "--sticky-dir": 1, "--local": 0, "--detach": 0, "--menus": 0,
-             "--virtual-rows": 1, "--no-virtual-rows": 0}
+             "--virtual-rows": 1, "--no-virtual-rows": 0, "--no-ask": 0}
 
 
 # Options that may appear before a subcommand.
@@ -373,6 +377,24 @@ def split_our_flags(argv: list[str]) -> tuple[list[str], list[str]]:
         ours.extend(argv[index:index + 1 + arity])
         index += 1 + arity
     return ours, theirs
+
+
+def guarded(func, args) -> int:
+    """Run a subcommand, and say what went wrong rather than traceback.
+
+    Every way into a subcommand goes through here, because the two that did
+    not - the shortcuts a bare `sticky-chat` takes when a server is already
+    up or when the last tabs are worth offering - reached `cmd_resume` and
+    `cmd_attach` outside the handler, so a tmux that refused to start came
+    back as a RuntimeError traceback through four frames of ours. The thing
+    that was wrong was in its last line either way; what the traceback added
+    was noise.
+    """
+    try:
+        return func(args)
+    except RuntimeError as exc:
+        die(str(exc))
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -426,7 +448,7 @@ def main(argv: list[str] | None = None) -> int:
         args.claude_args = []
         socket = args.socket or args.top_socket
         if Tmux(socket).server_running():
-            return cmd_attach(argparse.Namespace(socket=socket))
+            return guarded(cmd_attach, argparse.Namespace(socket=socket))
         # Named, not counted: what makes this worth a yes is seeing that
         # it is this morning's desk rather than every tab since August.
         run = last_run()
@@ -434,7 +456,7 @@ def main(argv: list[str] | None = None) -> int:
             answer = ask(f"sticky: nothing running. {run_summary(run)}. "
                          f"Reopen them?", "y/n")
             if answer == "y":
-                return cmd_resume(argparse.Namespace(
+                return guarded(cmd_resume, argparse.Namespace(
                     socket=socket, all=False, last=True, yes=True,
                     detach=False, client=None))
     else:
@@ -448,8 +470,4 @@ def main(argv: list[str] | None = None) -> int:
         args.socket = args.top_socket
     if getattr(args, "sticky_dir", None):
         args.dir = args.sticky_dir
-    try:
-        return args.func(args)
-    except RuntimeError as exc:
-        die(str(exc))
-    return 0
+    return guarded(args.func, args)

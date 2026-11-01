@@ -2004,9 +2004,68 @@ def cmd_restore(args) -> int:
     return 0
 
 
-def ask_project(tm: Tmux, source: str | None,
-                given: str | None) -> tuple[str, str, str]:
+def ask_agent(here: str) -> str:
+    """Which agent, on one line. Empty if it was cancelled.
+
+    Its own function because two callers ask it: the new-tab prompt, which
+    asks all three questions, and `sticky-chat start`, which asks the ones
+    the command line did not answer. It opens on the agent in the tab the key
+    was pressed in - beside a Gemini tab the answer is almost always Gemini
+    again - and Enter takes it, so the common case is the keystrokes it
+    always was.
+
+    Only what is installed is offered, because a tab in an agent this machine
+    does not have is a tab that exits as it opens. `here` is listed whether
+    it is installed or not: it is what the answer will be if Enter is
+    pressed, and a list that does not contain the answer on the line reads as
+    a bug.
+    """
+    offered = [agent.name for agent in installed_agents()]
+    if here not in offered:
+        offered.insert(0, here)
+
+    def complete_agent(word: str) -> tuple[str, list[str]]:
+        fits = [name for name in offered if name.startswith(word.lower())]
+        if not fits:
+            return word, []
+        return os.path.commonprefix(fits), fits
+
+    listed = " \u00b7 ".join(offered)
+    print(f"\n{DIM}{listed}{RESET}")
+    want = here
+    while True:
+        outcome, typed = prompt_line("agent>   ", want,
+                                     complete=complete_agent)
+        if outcome != "save":
+            return ""
+        want = typed.strip() or here
+        name = known_name(want)
+        if name:
+            return name
+        print(f"{DIM}no such agent: {want}{RESET}\n")
+
+
+def said_line(label: str, value: str) -> None:
+    """A decision already made, printed where it would have been asked.
+
+    `sticky-chat start --agent codex` has answered the second question, and
+    the block reads as the same three lines whether an answer was typed here
+    or on the command line - which is what makes it obvious that the one you
+    did not pass is the one being asked about.
+    """
+    print(f"{DIM}{label}{value}{RESET}")
+
+
+def ask_project(tm: Tmux, source: str | None, given: str | None,
+                ask_where: bool = True, agent: str = "",
+                fence: str = "") -> tuple[str, str, str]:
     """Ask what a new tab is for, what runs in it, and what fences it.
+
+    Each of the three can arrive already answered, and then it is printed
+    rather than asked: `given` with `ask_where=False` is the directory off
+    the command line, `agent` is `--agent`, `fence` is `--sandbox`. That is
+    what lets `sticky-chat start ~/thing` ask the two questions it used to
+    answer for you without asking again about the path you just typed.
 
     tmux's own command-prompt cannot complete a filename, so a path with one
     letter wrong came back as a failed run-shell somewhere off screen, and no
@@ -2015,12 +2074,8 @@ def ask_project(tm: Tmux, source: str | None,
     still on the line to correct.
 
     The second line is which agent, because a tab is two decisions and only
-    one of them was ever asked. It opens on the one in the tab you pressed
-    the key in - beside a Gemini tab the answer is almost always Gemini
-    again - and Enter takes it, so the common case is the keystrokes it
-    always was. Only what is installed is offered: a tab in an agent this
-    machine does not have is a tab that exits as it opens. `shell` is in the
-    list, which is what retired the separate key for it.
+    one of them was ever asked - `ask_agent` is the line itself, and `shell`
+    being in its list is what retired the separate key for a shell tab.
 
     The third line is how much of your disk that agent can reach, and it is
     here rather than in a flag because it is a per-tab decision: a container
@@ -2043,46 +2098,39 @@ def ask_project(tm: Tmux, source: str | None,
     # Started here and asked about below: finding out whether this machine
     # can run a container is a round trip to a daemon, and a prompt that
     # stops for it loses what you typed into the stop. By the time the third
-    # question is reached the answer is in.
-    warm_up()
+    # question is reached the answer is in. Only when there is a third
+    # question - an answer that came with `--sandbox` needs nothing warmed.
+    if not fence:
+        warm_up()
     text = start or os.getcwd()
-    while True:
-        outcome, typed = prompt_line("project> ", text,
-                                     complete=complete_path)
-        if outcome != "save":
-            return "", ""
-        text = typed.strip()
-        if not text:
-            return "", ""
-        path = os.path.abspath(os.path.expanduser(text))
-        if os.path.isdir(path):
-            break
-        print(f"{DIM}no such directory: {path}{RESET}\n")
+    path = os.path.abspath(os.path.expanduser(text))
+    # A directory that was named and is not there is asked about after all,
+    # because a line with the path still on it is the cheapest way to fix a
+    # typo - better than dying and making somebody retype the command.
+    if not ask_where and os.path.isdir(path):
+        said_line("project> ", path)
+    else:
+        while True:
+            outcome, typed = prompt_line("project> ", text,
+                                         complete=complete_path)
+            if outcome != "save":
+                return "", "", ""
+            text = typed.strip()
+            if not text:
+                return "", "", ""
+            path = os.path.abspath(os.path.expanduser(text))
+            if os.path.isdir(path):
+                break
+            print(f"{DIM}no such directory: {path}{RESET}\n")
 
     here = agent_of(tm, source).name if source else DEFAULT_AGENT
-    offered = [agent.name for agent in installed_agents()]
-    if here not in offered:
-        offered.insert(0, here)
-
-    def complete_agent(word: str) -> tuple[str, list[str]]:
-        fits = [name for name in offered if name.startswith(word.lower())]
-        if not fits:
-            return word, []
-        return os.path.commonprefix(fits), fits
-
-    listed = " \u00b7 ".join(offered)
-    print(f"\n{DIM}{listed}{RESET}")
-    want = here
-    while True:
-        outcome, typed = prompt_line("agent>   ", want,
-                                     complete=complete_agent)
-        if outcome != "save":
-            return "", ""
-        want = typed.strip() or here
-        name = known_name(want)
-        if name:
-            break
-        print(f"{DIM}no such agent: {want}{RESET}\n")
+    if agent:
+        name = agent
+        said_line("\nagent>   ", name)
+    else:
+        name = ask_agent(here)
+        if not name:
+            return "", "", ""
 
     # What the agent may reach. The answer you gave last time wins, because
     # it is an answer rather than an inference - and unlike the agent line,
@@ -2090,6 +2138,9 @@ def ask_project(tm: Tmux, source: str | None,
     # preference about your own machine. Until there is one, the fence on
     # the tab this was opened from, and failing that the strongest fence
     # this machine can run.
+    if fence:
+        said_line("sandbox> ", fence)
+        return path, name, fence
     was = fenced_by(launched_as(tm, claude_pane(tm, source) or source,
                                 agent_named(name))) if source else ""
     fence = remembered() or was or suggested_fence()
@@ -2961,21 +3012,65 @@ def cmd_sandbox(args) -> int:
     return 0
 
 
+def start_asks(args, tty: bool) -> bool:
+    """Whether `sticky-chat start` has a question left and somebody to ask.
+
+    A tab is three decisions, and from the command line two of them used to
+    be made for you in silence: the agent was always claude, whatever else
+    was installed, and the fence was whatever the choice file said. Both are
+    questions the new-tab prompt asks, so `start` asks them too - the same
+    prompt, with whatever the command line already answered printed rather
+    than asked.
+
+    What is left out, and why:
+
+    - no terminal, no question. This is the path a key binding takes through
+      `run-shell`, a login item takes at boot and a script takes anywhere,
+      and `prompt_line` needs a tty to go raw on. Nothing is asked, and the
+      answers are the ones `start` always used.
+    - `--agent` and `--sandbox` together answer both, so there is nothing to
+      ask about. One of them answers one line and the other is still asked.
+    - `--agent-cmd` says exactly what to run, which is a more specific answer
+      than a profile name; the agent line would be asking about something
+      already settled.
+    - `--no-ask` for when a terminal is there and the questions are not
+      wanted: the defaults, in silence, as before.
+    - `--ask-here` means ask, and ask about the project as well. It is what
+      the floating prompt runs.
+    """
+    if getattr(args, "ask_here", False):
+        return True
+    if not tty or getattr(args, "no_ask", False):
+        return False
+    if getattr(args, "agent_cmd", None):
+        return not getattr(args, "sandbox", None)
+    return not (getattr(args, "agent", None)
+                and getattr(args, "sandbox", None))
+
+
 def cmd_start(args) -> int:
     tm = Tmux(args.socket)
     binary = self_path()
     if getattr(args, "ask", False):
         return open_project_prompt(tm, binary, args)
-    if getattr(args, "ask_here", False):
+    if start_asks(args, sys.stdin.isatty()):
+        source = getattr(args, "source_pane", None)
+        here = agent_of(tm, source).name if source else DEFAULT_AGENT
+        # The project line only when this is the prompt. From a command line
+        # the path was just typed, so it is printed where it would have been
+        # asked - and `--agent-cmd` settles the agent line with whatever the
+        # profile would have been, because the command is the real answer.
         project, chose, fenced = ask_project(
-            tm, getattr(args, "source_pane", None), args.dir)
+            tm, source, args.dir,
+            ask_where=bool(getattr(args, "ask_here", False)),
+            agent=(getattr(args, "agent", None)
+                   or (here if getattr(args, "agent_cmd", None) else "")),
+            fence=getattr(args, "sandbox", None) or "")
         if not project:
             return 0                    # cancelled: nothing was opened
         # Answered, so it is not a default any more: `fence_tab` takes an
         # explicit answer over anything the tab beside it was running.
         args.sandbox = fenced
-        source = getattr(args, "source_pane", None)
-        here = agent_of(tm, source).name if source else DEFAULT_AGENT
         if chose != here:
             # Only when it is a change. Taking the answer the prompt opened
             # with would read as "--agent was given", and that is what stops

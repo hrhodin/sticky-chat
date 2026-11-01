@@ -474,6 +474,47 @@ README asks for. tmux master has `new-pane -O -C`, a modal pane that closes
 itself when clicked outside - the same behaviour with none of our hook - but
 it was merged three days before this was written and no release has it yet.
 
+## Asking on the command line too
+
+A tab is three decisions - where, what, and how much of the disk it can
+reach - and `sticky-chat start` used to make two of them in silence: the
+agent was `DEFAULT_AGENT`, which is claude, whatever else the machine had
+installed, and the fence was whatever `default_fence` said. The new-tab
+prompt asked about both, so the command line asks through the same code
+rather than through a second prompt that would drift from it.
+
+`ask_project` gained three parameters, each saying "this one is already
+answered": `ask_where=False` means `given` is the project, `agent` is what
+`--agent` said, `fence` is what `--sandbox` said. An answered line is
+printed by `said_line` where it would have been asked, dimmed, so the block
+reads as the same three lines either way - which is what makes it obvious
+that the line being asked is the one you did not pass. The agent line itself
+moved into `ask_agent`, because two callers now ask it.
+
+`start_asks(args, tty)` is the gate, and it is a function of its own so the
+cases that must *not* prompt can be asserted:
+
+- no tty: `prompt_line` needs a terminal to go raw on, and this is the path
+  a key binding takes through `run-shell`, a login item takes at boot and a
+  script takes anywhere. The answers are the ones `start` always used.
+- `--agent` and `--sandbox` together: nothing left to ask. Either one alone
+  still leaves the other line.
+- `--agent-cmd`: a more specific answer than a profile name.
+- `--no-ask`: a terminal is there and the questions are not wanted.
+- `--ask-here`: ask, and ask about the project as well. It is what the
+  floating prompt runs in its own pane.
+
+One thing to keep in mind when touching `cmd_start`: the answer is only
+written back to `args.agent` when it differs from `here` - the agent of the
+tab this was opened from, or claude. Assigning it unconditionally reads
+downstream as "`--agent` was given", and that is exactly what stops a new
+tab inheriting the command line of the tab it was opened beside.
+
+And `ask_project` returns three values on every path. It used to return two
+on a cancel at the project line, which unpacked into `ValueError` at the
+caller rather than into a tab that was not opened - a bug that survived
+because nothing had cancelled there yet.
+
 ## Knowing that Claude is still talking
 
 Scrolled back, the view is anchored to the text, not to the bottom: the line

@@ -103,7 +103,10 @@ def sticky_home(tmp_path_factory):
 def run_sticky(sticky_home):
     """Invoke the CLI the way a user would, against the test server."""
 
-    def run(*args, stdin=None, check=True, home=None):
+    def run(*args, stdin="", check=True, home=None):
+        # A pipe rather than this terminal, always: `start` asks which agent
+        # and which fence when it has a tty to ask at, and a suite run with
+        # `pytest -s` would otherwise sit at that prompt for ever.
         env = {**os.environ, "STICKY_HOME": str(home or sticky_home)}
         done = subprocess.run(
             [sys.executable, str(LAUNCHER), "--socket", SOCKET, *args],
