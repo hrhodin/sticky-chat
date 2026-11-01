@@ -250,6 +250,144 @@ class TestRememberingTheAnswer:
             assert "RUN echo mine" in fh.read()
 
 
+class TestNothingIsFencedUntilYouSaySo:
+    """The default is no fence, and a build is asked for.
+
+    This is here because the first version of it got it wrong and shipped:
+    `default_fence` inferred the answer from what the machine could run, so
+    `sticky-chat start` on a machine with a container engine up went away for
+    minutes pulling a base image and building one, for a fence nobody had
+    asked for. The two halves of the fix are asserted apart - what an unasked
+    tab gets, and what happens when the image it would need is not there -
+    because they failed together and either one alone would have been enough
+    to be caught by.
+    """
+
+    def args(self, **fields):
+        return argparse.Namespace(**{"sandbox": "", "agent_cmd": None,
+                                     "sandbox_image": "", "sandbox_arg": [],
+                                     **fields})
+
+    def ready(self, sticky, monkeypatch, built=False, answer=None):
+        """A machine where every fence could be had, and a note of whether
+        anything asked to build."""
+        done = []
+        monkeypatch.setattr(sticky.commands, "unavailable", lambda fence: "")
+        monkeypatch.setattr(sticky.commands, "unreachable",
+                            lambda *a, **k: "")
+        monkeypatch.setattr(sticky.commands, "image_built",
+                            lambda *a, **k: built)
+        monkeypatch.setattr(sticky.commands, "ensure_image",
+                            lambda *a, **k: done.append("built") or "")
+        if answer is not None:
+            monkeypatch.setattr(sticky.commands, "ask",
+                                lambda question, choices:
+                                done.append(question) or answer)
+        return done
+
+    def test_a_fence_that_could_be_had_is_suggested_not_taken(self, box,
+                                                              monkeypatch):
+        monkeypatch.setattr(box, "unavailable", lambda fence: "")
+        assert box.suggested_fence() == "docker", "there is one to be had"
+        assert box.default_fence() == "off", "and nobody has asked for it"
+
+    def test_the_answer_on_record_is_the_default(self, box, monkeypatch):
+        monkeypatch.setattr(box, "unavailable", lambda fence: "")
+        box.remember("podman")
+        assert box.default_fence() == "podman"
+
+    def test_an_unasked_tab_opens_on_the_host(self, sticky, monkeypatch):
+        """And asks no engine anything on the way: a start that has to wait
+        for a daemon to answer before the first pane comes up is the other
+        half of what was wrong with inferring this."""
+        done = self.ready(sticky, monkeypatch)
+        got = sticky.fence_tab("claude", "/p", sticky.CLAUDE, self.args())
+        assert got == "claude"
+        assert done == []
+
+    def test_a_remembered_fence_asks_before_it_builds(self, sticky,
+                                                      monkeypatch, capsys):
+        """`n` leaves the tab unfenced rather than leaving it unopened: a
+        remembered answer is a preference, and the image is a thing you can
+        build later with one line, which is the line it prints."""
+        done = self.ready(sticky, monkeypatch, answer="n")
+        sticky.sandbox.remember("docker")
+        got = sticky.fence_tab("claude", "/p", sticky.CLAUDE, self.args())
+        assert got == "claude"
+        assert "built" not in done, "nothing was built"
+        assert "Build it now?" in done[0]
+        said = capsys.readouterr().err
+        assert "not fenced" in said and "sandbox --build docker" in said
+
+    def test_no_terminal_to_ask_at_is_a_no(self, sticky, monkeypatch,
+                                           capsys):
+        """`ask` answers nothing when there is no tty, and nothing is not
+        yes. This is the path a script takes."""
+        done = self.ready(sticky, monkeypatch)
+        sticky.sandbox.remember("docker")
+        assert not sys.stdin.isatty(), "the premise of the test"
+        got = sticky.fence_tab("claude", "/p", sticky.CLAUDE, self.args())
+        assert got == "claude"
+        assert done == []
+        assert "not fenced" in capsys.readouterr().err
+
+    def test_saying_yes_builds_it_and_fences_the_tab(self, sticky,
+                                                     monkeypatch):
+        done = self.ready(sticky, monkeypatch, answer="y")
+        sticky.sandbox.remember("docker")
+        got = sticky.fence_tab("claude", "/p", sticky.CLAUDE, self.args())
+        assert "built" in done
+        assert got.startswith("docker run")
+
+    def test_a_fence_you_named_is_not_asked_about(self, sticky, monkeypatch):
+        """Naming a container is asking for the image it runs in. The
+        question is for the answer that came off a file, not for the one on
+        the command line in front of you."""
+        done = self.ready(sticky, monkeypatch,
+                          answer=None)   # `ask` left real: calling it fails
+        monkeypatch.setattr(sticky.commands, "ask",
+                            lambda *a: pytest.fail("asked anyway"))
+        got = sticky.fence_tab("claude", "/p", sticky.CLAUDE,
+                               self.args(sandbox="docker"))
+        assert "built" in done
+        assert got.startswith("docker run")
+
+    def test_a_built_image_is_not_asked_about_either(self, sticky,
+                                                     monkeypatch):
+        """The question is about the minutes, and there are none to spend
+        when the image is already in the store."""
+        self.ready(sticky, monkeypatch, built=True)
+        monkeypatch.setattr(sticky.commands, "ask",
+                            lambda *a: pytest.fail("asked anyway"))
+        sticky.sandbox.remember("docker")
+        got = sticky.fence_tab("claude", "/p", sticky.CLAUDE, self.args())
+        assert got.startswith("docker run")
+
+
+class TestAptInsideARootlessContainer:
+    """The Dockerfile's one concession to how podman maps uids.
+
+    apt drops to the `_apt` user to fetch, and a rootless container whose uid
+    map holds a single id cannot: `setgroups 65534 failed - Operation not
+    permitted`, then `Method http has died unexpectedly`, and a build that
+    ends at step 2 having pulled the base image for nothing. Met on a machine
+    whose home is on NFS and whose /etc/subuid has no ranges in it.
+    """
+
+    def test_apt_is_told_to_fetch_as_root(self, box):
+        text = box.DOCKERFILE
+        assert 'APT::Sandbox::User "root"' in text
+        assert text.index("apt.conf.d") < text.index("apt-get update"), \
+            "and told before the first fetch, not after it"
+
+    def test_the_file_on_disk_says_it_too(self, box):
+        """The template is what a new machine gets; the file is what builds.
+        An older machine keeps its own file, which is the point of the file -
+        and is why this was worth saying out loud in the docs."""
+        with open(box.write_dockerfile(), encoding="utf-8") as fh:
+            assert 'APT::Sandbox::User "root"' in fh.read()
+
+
 class TestMoreThanOneEngine:
     """docker and podman, and the one place they really differ: who the
     container runs as.
@@ -408,7 +546,7 @@ class TestAskingWhatThisMachineCanRun:
         self.probe(box, monkeypatch, {"docker": True})
         assert box.unavailable(box.DOCKER) == ""
         assert "podman machine start" in box.unavailable(box.PODMAN)
-        assert box.default_fence() == "docker"
+        assert box.suggested_fence() == "docker"
 
     def test_an_engine_that_is_down_is_said_so_in_its_own_words(self, box,
                                                                monkeypatch):
@@ -425,10 +563,11 @@ class TestAskingWhatThisMachineCanRun:
         monkeypatch.setattr(box.shutil, "which", lambda name: None)
         assert box.unavailable(box.PODMAN) == "podman is not installed"
 
-    def test_podman_alone_is_what_a_new_tab_opens_in(self, box, monkeypatch):
+    def test_podman_alone_is_the_one_that_gets_suggested(self, box,
+                                                         monkeypatch):
         """A machine with one engine should not have to be told which."""
         self.probe(box, monkeypatch, {"podman": True})
-        assert box.default_fence() == "podman"
+        assert box.suggested_fence() == "podman"
         assert box.engine_named() is box.PODMAN
 
     def test_warming_up_asks_every_engine_at_once(self, box, monkeypatch):
@@ -1218,13 +1357,14 @@ class TestWhetherTheNamespaceFenceCanBeHad:
         assert len(calls) == 1
 
     def test_a_linux_with_neither_offers_neither(self, box, monkeypatch):
-        """And `default_fence` falls all the way through to no fence rather
+        """And the suggestion falls all the way through to no fence rather
         than to one that would take the tab with it."""
         monkeypatch.setattr(box.sys, "platform", "linux")
         monkeypatch.setattr(box.shutil, "which", lambda name: None)
         why = box.unavailable(box.BWRAP)
         assert why == "bwrap is not installed (the package is called " \
                       "bubblewrap)", "the program and the package differ"
+        assert box.suggested_fence() == "off"
         assert box.default_fence() == "off"
 
     def test_the_container_is_preferred_where_there_is_a_choice(
@@ -1232,7 +1372,7 @@ class TestWhetherTheNamespaceFenceCanBeHad:
         """It fences more: a namespace shares the host's /usr, its kernel and
         its uid, and a container shares only the last two."""
         monkeypatch.setattr(box, "unavailable", lambda fence: "")
-        assert box.default_fence() == "docker"
+        assert box.suggested_fence() == "docker"
 
     def test_a_fence_nobody_has_run_is_never_the_default(self, box,
                                                          monkeypatch):
@@ -1243,7 +1383,7 @@ class TestWhetherTheNamespaceFenceCanBeHad:
         monkeypatch.setattr(box, "unavailable",
                             lambda fence: "" if fence is box.BWRAP else "no")
         assert not box.BWRAP.tested
-        assert box.default_fence() == "off"
+        assert box.suggested_fence() == "off"
         box.remember("bwrap")
         assert box.default_fence() == "bwrap", "once you have said so"
 

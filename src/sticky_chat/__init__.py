@@ -206,6 +206,7 @@ from .sandbox import (
     runs_in_image,
     sandbox_dir,
     split_command,
+    suggested_fence,
     unavailable,
     unreachable,
     warm_up,

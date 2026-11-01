@@ -74,6 +74,7 @@ from .sandbox import (
     remembered,
     runs_in_image,
     split_command,
+    suggested_fence,
     unavailable,
     unreachable,
     warm_up,
@@ -2091,7 +2092,7 @@ def ask_project(tm: Tmux, source: str | None,
     # this machine can run.
     was = fenced_by(launched_as(tm, claude_pane(tm, source) or source,
                                 agent_named(name))) if source else ""
-    fence = remembered() or was or default_fence()
+    fence = remembered() or was or suggested_fence()
     fences = {choice.name: unavailable(choice) for choice in FENCES}
     # Only the ones that can be had, each saying what the agent could reach
     # from inside it - the question being asked. A fence this machine cannot
@@ -2128,12 +2129,16 @@ def ask_project(tm: Tmux, source: str | None,
             return word, []
         return os.path.commonprefix(fits), fits
 
+    offered = fence
     while True:
         outcome, typed = prompt_line("sandbox> ", fence,
                                      complete=complete_fence)
         if outcome != "save":
             return "", "", ""
-        fence = typed.strip() or default_fence()
+        # An empty line is the line as it was offered, the way the agent
+        # question above reads one - and not an inference of its own, because
+        # the answer that costs minutes is not one to arrive at by default.
+        fence = typed.strip() or offered
         chosen = fence_named(fence)
         if not chosen:
             print(f"{DIM}no such sandbox: {fence}{RESET}\n")
@@ -2288,6 +2293,23 @@ def fence_tab(command: str, project: str, agent: Agent, args,
         print(f"sticky: the {fence.name} sandbox is not proven yet - "
               f"{fence.caveat}.", file=sys.stderr)
     image = (getattr(args, "sandbox_image", "") or DEFAULT_IMAGE)
+    # Nobody asked for this fence on this command line - it is the answer on
+    # record - and the first tab of an engine has an image to build before it
+    # can open: a base image pulled and a few minutes of building, which is
+    # the last thing `sticky-chat start` should do without a word. So it is
+    # asked, here, where saying no costs nothing; Enter means no, because the
+    # expensive half should be the half somebody typed. An explicit
+    # `--sandbox` is not asked at all - naming a container is asking for the
+    # image it runs - and neither is a tab whose image is already built.
+    unbuilt = (fence.uses_image and not asked
+               and not image_built(image, fence.cli))
+    if unbuilt and ask(f"sticky: {fence.name} has no {image} yet. Build it "
+                       f"now? (a few minutes, and a base image to "
+                       f"download)", "n/y") != "y":
+        print(f"sticky: no {image} for {fence.name} yet, so this tab is not "
+              f"fenced - `sticky-chat sandbox --build {fence.name}` builds "
+              f"one", file=sys.stderr)
+        return refence(command, fence_named("off"), project, agent)
     if fence.uses_image:
         # Only a fence that runs one. There is nothing to build for a
         # namespace, and a first tab that went away for three minutes to
@@ -2894,8 +2916,18 @@ def cmd_sandbox(args) -> int:
         return 0
 
     image = args.sandbox_image or DEFAULT_IMAGE
-    print(f"{BOLD}sandbox{RESET}  {DIM}new tabs open on "
-          f"{default_fence()}{RESET}\n")
+    # "off because you said off" and "off because nobody has said" are not
+    # the same answer, and what to do next is the difference: the suggestion
+    # is named so that turning a fence on is a line to copy rather than a
+    # thing to look up.
+    suggested = "" if remembered() else suggested_fence()
+    said = (f"new tabs open on {remembered()}" if remembered() else
+            "nothing chosen yet, so new tabs run on the host")
+    print(f"{BOLD}sandbox{RESET}  {DIM}{said}{RESET}")
+    if suggested and suggested != OFF.name:
+        print(f"         {DIM}{suggested} is ready here: sticky-chat "
+              f"sandbox --set {suggested}{RESET}")
+    print()
     for fence in FENCES:
         why = unavailable(fence)
         state = f"{DIM}{why}{RESET}" if why else "ready"

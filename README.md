@@ -699,14 +699,37 @@ have answered once it opens on the fence the tab you pressed it in is running
 behind. `--sandbox off|docker|podman|bwrap` says it without the prompt, and
 `sticky-chat sandbox --set podman` changes the default without opening a tab.
 
-The first tab that asks a given engine for a container builds the image,
-which takes about a minute and happens once per engine — docker and podman
-keep separate image stores, so the tag one of them has is not there for the
-other. It is built from `~/.sticky/sandbox/Dockerfile`, written the first
-time and never rewritten afterwards — add the toolchain your projects need to
-it and run `sticky-chat sandbox --build`, or `--build podman` to say which
-store you mean. `sticky-chat sandbox` on its own says what this machine can
-run, which images are built, and where the agent's home is.
+**Nothing is fenced until you say so.** The prompt *suggests* a container
+where one can be had, which is a line you can see and edit; no fence is ever
+inferred from what the machine happens to have installed. So `sticky-chat
+start`, and every tab opened without an answer on record, runs on the host
+exactly as it did before any of this existed. `sticky-chat sandbox` says
+which it is: the answer you gave, or that there is none yet.
+
+The first tab that asks a given engine for a container needs an image, and
+building one takes minutes and a base image downloaded — so it asks first,
+and Enter means no. Once per engine: docker and podman keep separate image
+stores, so the tag one of them has is not there for the other. It is built
+from `~/.sticky/sandbox/Dockerfile`, written the first time and never
+rewritten afterwards — add the toolchain your projects need to it and run
+`sticky-chat sandbox --build`, or `--build podman` to say which store you
+mean. `sticky-chat sandbox` on its own says what this machine can run, which
+images are built, and where the agent's home is.
+
+A build that stops at step 2 saying `setgroups 65534 failed — Operation not
+permitted` is apt trying to drop privileges inside a rootless container whose
+uid map has one id in it, which is what a podman with no `/etc/subuid` ranges
+gives you. The current Dockerfile tells apt to fetch as root and gets through
+it; a `~/.sticky/sandbox/Dockerfile` written by an older version does not, so
+delete it (it is rewritten) or add the line yourself:
+
+```dockerfile
+RUN echo 'APT::Sandbox::User "root";' > /etc/apt/apt.conf.d/00no-sandbox
+```
+
+A failed build leaves the base image it pulled in that engine's store and
+nothing else; `podman image prune` or `docker image prune` clears what it got
+through, and the next build picks up from what is left.
 
 **What is in the image.** Debian 12 with Node 22 (`node:22-bookworm-slim`),
 `git`, `ripgrep`, `curl`, `less` and `procps`, the agent installed from npm,

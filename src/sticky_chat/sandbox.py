@@ -201,6 +201,15 @@ DOCKERFILE = """\
 # visible from in here.
 FROM node:22-bookworm-slim
 
+# apt fetches as the unprivileged `_apt` user, and in a rootless container
+# whose uid map holds a single id that cannot be done: "setgroups 65534
+# failed - Operation not permitted", then "Method http has died
+# unexpectedly", and a build that stops here at step 2. A podman on a machine
+# with no /etc/subuid ranges is the usual way to meet it. Fetching as root is
+# apt's own documented way out, and in an image built once from a file you
+# can read there is nothing for the separation to protect.
+RUN echo 'APT::Sandbox::User "root";' > /etc/apt/apt.conf.d/00no-sandbox
+
 RUN apt-get update && apt-get install -y --no-install-recommends \\
         ca-certificates curl git less procps ripgrep \\
     && rm -rf /var/lib/apt/lists/*
@@ -348,13 +357,15 @@ BWRAP = Fence(
 FENCES = (OFF, DOCKER, PODMAN, BWRAP)
 
 # What is true of all of them, and so belongs under the list rather than in
-# any one row. All three are things people are caught by: an agent that can
+# any one row. Each is something people are caught by: an agent that can
 # reach the API can reach anything else it likes through the same hole; a
 # container's compilers are the image's, which is how a tab in a box came to
-# be unable to run the tests of the project it was boxed for; and "nothing
-# else of yours" means nothing - a mounted share, a sibling checkout and
-# /Volumes are all simply absent, which is the fence working and reads as a
-# missing disk until you know it.
+# be unable to run the tests of the project it was boxed for; "nothing else
+# of yours" means nothing - a mounted share, a sibling checkout and /Volumes
+# are all simply absent, which is the fence working and reads as a missing
+# disk until you know it; and the last one is the minutes, which is the half
+# of the answer the row has no room for and the half somebody choosing a
+# container at a prompt has no other way of learning before it starts.
 FENCE_NOTES = (
     "none of them fence the network: what reaches the API reaches the rest",
     "a container holds this project and nothing else - a mounted drive, a "
@@ -362,6 +373,8 @@ FENCE_NOTES = (
     ":ro to put it in read-only",
     "a container's toolchain is the image's, so what your project builds "
     "with goes in the Dockerfile",
+    "the first container tab on this machine builds that image: a few "
+    "minutes and a base image downloaded, once per engine",
 )
 
 
@@ -545,38 +558,57 @@ def remember(name: str) -> None:
         pass                            # a default is not worth failing over
 
 
-def default_fence() -> str:
-    """What to offer when a tab is opened: last time's answer, or the best
-    fence this machine can actually run.
+def suggested_fence() -> str:
+    """What the prompt puts on its line when nobody has chosen yet: the
+    strongest fence this machine can actually run.
 
-    A fence you have to ask for is a fence nobody has on, so the first tab on
-    a machine with docker running is offered the container. The answer is
-    still a prompt away, and once it is given it is what comes back here.
+    A suggestion, not a default, and the difference is the whole reason this
+    is its own function. On a line you can see and edit it is sticky saying
+    "a container is available here"; taken as a default by a tab opening from
+    the command line it was a base image being pulled and an image built for
+    minutes on a machine that had asked for none of it. What an unasked tab
+    gets is `default_fence`, and that is no fence at all.
 
     The first engine in the table that this machine can run, which on a
     machine with both is docker - not because it is better but because it was
-    here first and a default that moved when podman was installed would be a
-    surprise. `sticky-chat sandbox --set podman` is the answer to wanting the
-    other one, and it is remembered above.
+    here first and a suggestion that moved when podman was installed would be
+    a surprise. `sticky-chat sandbox --set podman` is the answer to wanting
+    the other one, and it is remembered.
 
     The container first, where there is a choice, because it fences more: a
     namespace shares the host's /usr, the host's kernel and the host's uid,
     and a container shares only the last two.
 
     And only fences somebody has run. An untested fence is not a thing to
-    hand to a machine that never asked for one - a default that breaks the
-    first tab after an upgrade is worse than no default - so `bwrap` is
-    offered by the prompt, chosen by hand, and from then on remembered like
-    any other answer. The day a tab has been taken through it end to end,
+    suggest to a machine that never asked for one, so `bwrap` is listed by
+    the prompt, chosen by hand, and from then on remembered like any other
+    answer. The day a tab has been taken through it end to end,
     `tested=True` is what puts it in this list.
     """
-    chosen = remembered()
-    if chosen:
-        return chosen
     for fence in FENCES:
         if fence is not OFF and fence.tested and not unavailable(fence):
             return fence.name
     return OFF.name
+
+
+def default_fence() -> str:
+    """What a tab opens behind when nobody is asked: the answer on record,
+    and otherwise nothing.
+
+    This used to infer one, and the inference was wrong in the way that
+    matters. `sticky-chat start` on a machine with a container engine running
+    began pulling a base image and building an image nobody had asked for -
+    minutes of it, before the first tab came up, on the strength of docker
+    merely being installed. A fence changes what the agent can reach and
+    costs an image to keep working: that is a decision, and a decision wants
+    somebody to have made it.
+
+    So the only default is one that was given - the prompt's `sandbox>` line,
+    `--sandbox` on a command line, or `sticky-chat sandbox --set`. Until then
+    tabs run on the host exactly as they did before any of this existed, and
+    `suggested_fence` is what the prompt offers while you decide.
+    """
+    return remembered() or OFF.name
 
 
 def engine_named(name: str = "") -> Fence | None:
@@ -671,7 +703,14 @@ def build_image(image: str = DEFAULT_IMAGE, cli: str = DOCKER.cli,
         return str(exc)
     if done.returncode:
         tail = (done.stderr or "").strip().splitlines()[-5:] if quiet else []
-        return "\n".join([f"{cli} build failed", *tail])
+        # Where to fix it and how to try again, because a build that failed
+        # halfway is a file to edit rather than a mess to clean: what the
+        # engine kept is the base image it pulled and the layers it got
+        # through, and the next build reuses both. The file is named here so
+        # that it does not have to be found.
+        return "\n".join([f"{cli} build failed", *tail,
+                           f"edit {path}, then `sticky-chat sandbox --build "
+                           f"{cli}` to try again"])
     return ""
 
 

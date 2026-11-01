@@ -1484,12 +1484,78 @@ is, so covering that path is what keeps `~` and `$HOME` the same answer. And
 when bwrap does, including under the SIGKILL `respawn-pane -k` sends
 anyway.
 
-Being untested has one behavioural consequence, in `default_fence`: a fence
-with `tested=False` is offered by the prompt and chosen by hand, and is never
-what a machine that has not been asked gets, because a default that breaks
-the first tab after an upgrade is worse than no default. Taking a tab through
-it end to end on a Linux box and setting `tested=True` is the whole of what
-is left to do.
+Being untested has one behavioural consequence, in `suggested_fence`: a fence
+with `tested=False` is listed by the prompt and chosen by hand, and is never
+what the prompt offers, because a suggestion that breaks the first tab after
+an upgrade is worse than none. Taking a tab through it end to end on a Linux
+box and setting `tested=True` is the whole of what is left to do.
+
+## A suggestion is not a default
+
+`suggested_fence` and `default_fence` are the same question asked of two
+different people, and conflating them shipped a bug worth keeping the shape
+of. `default_fence` used to infer its answer - the strongest fence this
+machine can run, which on any machine with a container engine up is `docker`
+- and that inference reached `fence_tab`, which fences a tab that named no
+fence of its own. The result: `sticky-chat start` on a machine where docker
+happened to be installed pulled a base image and built for minutes before
+the first pane came up, for a fence nobody had asked for. On a shared Linux
+box it then failed, because apt cannot drop privileges inside a rootless
+container with a single uid in its map.
+
+So they are apart now, and the split is the fix:
+
+- `suggested_fence()` infers, and only the prompt reads it - as the value
+  pre-typed on the `sandbox>` line, where it is a thing you can see, edit and
+  accept. An empty line there is that same value, the way the `agent>` line
+  reads one, rather than an inference taken a second time.
+- `default_fence()` is `remembered() or "off"`. No inference at all. A tab
+  that was not asked gets what you answered last time, and before you have
+  ever answered it gets the host.
+
+The second half is `fence_tab`, which asks before a first build: a container
+fence that came off the choice file, on an engine with no image in its store,
+gets one question with Enter meaning no, and `n` opens the tab unfenced with
+the one line that builds the image later. An explicit `--sandbox docker`
+skips the question - naming a container is asking for the image it runs in,
+and a script that passes the flag should not stop on a prompt - and so does a
+tab whose image is already built, because then there are no minutes to spend.
+`ask` returns `""` with no tty, which is not `"y"`, so nothing builds behind
+a `run-shell` either.
+
+What this costs: a machine that has chosen `docker` and then lost the image
+opens unfenced rather than refusing to open. That is deliberate and it is the
+same stance `unavailable` already took - a preference should not be able to
+make `sticky-chat start` fail - but it is the one place where saying nothing
+and reading nothing leaves you with less fence than you asked for, which is
+why the line it prints says so rather than being quiet about it.
+
+## apt inside a rootless container
+
+The Dockerfile's first `RUN` is a concession to how podman maps uids:
+
+```dockerfile
+RUN echo 'APT::Sandbox::User "root";' > /etc/apt/apt.conf.d/00no-sandbox
+```
+
+apt drops to the unprivileged `_apt` user to fetch, and a rootless container
+whose uid map holds a single id cannot do it: `setgroups 65534 failed -
+setgroups (1: Operation not permitted)`, then `Method http has died
+unexpectedly`, and the build ends at step 2 having pulled the base image for
+nothing. The usual way to meet it is a podman on a machine whose
+`/etc/subuid` has no ranges for your account - a managed Linux box with an
+NFS home is the shape of it, and podman says the other half out loud:
+`Network file system detected as backing store`. Fetching as root is apt's
+own documented answer, and inside an image built once from a file you can
+read there is nothing for the privilege separation to protect.
+
+It is in the template, so a machine that has never built gets it. A
+`~/.sticky/sandbox/Dockerfile` written by an earlier version keeps the file
+it has - `write_dockerfile` never overwrites, which is the point of it being
+a file - so that machine needs the line added or the file deleted. A failed
+build leaves the base image and the layers it got through in that engine's
+store, and the next build reuses both, which is why `build_image` names the
+file and the retry rather than talking about cleaning up.
 
 ## Why a scroll used to freeze the session
 
