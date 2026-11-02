@@ -218,6 +218,19 @@ class TestWhichFenceATabGets:
             sticky.fence_tab("claude", "/p", sticky.CLAUDE,
                              self.args(sandbox="chroot"))
 
+    def test_the_agents_own_sandbox_flag_is_pointed_at_the_dashes(
+            self, sticky, capsys):
+        """`--sandbox danger-full-access` is codex's flag, and sticky's
+        parser takes the name first. The answer is `--`, and the message
+        says so rather than listing four fences that are not what was
+        meant."""
+        with pytest.raises(SystemExit):
+            sticky.fence_tab("codex", "/p", sticky.CODEX,
+                             self.args(sandbox="danger-full-access"))
+        said = capsys.readouterr().err
+        assert "-- --sandbox danger-full-access" in said
+        assert "reaches the agent untouched" in said
+
     def test_off_takes_a_fence_off(self, sticky, box):
         line = box.container_command("claude", "/p", sticky.CLAUDE)
         assert sticky.fence_tab(line, "/p", sticky.CLAUDE,

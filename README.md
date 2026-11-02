@@ -146,7 +146,10 @@ sticky-chat                        # re-attach later
 ```
 
 Arguments after `--` reach the agent unchanged, so `--continue` and
-`--resume` work through `sticky-chat start`. Notes belong to the conversation, not to
+`--resume` work through `sticky-chat start`. Flags sticky does not know go
+to the agent even without it; the ones that share a name with sticky's own
+need it — codex's `--sandbox` most of all, since sticky's `--sandbox` is the
+fence: `sticky codex -- -s danger-full-access`. Notes belong to the conversation, not to
 the directory: a second tab on the same project opens an empty sidebar, and
 resuming a tab brings its own notes back. `C-g z` zooms the chat pane to
 full width; the sidebar keeps running behind it.

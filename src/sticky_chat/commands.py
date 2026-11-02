@@ -2320,7 +2320,16 @@ def fence_tab(command: str, project: str, agent: Agent, args,
     if asked:
         fence = fence_named(asked)
         if not fence:
-            die(f"no such sandbox: {asked} (one of {fence_choices()})")
+            # Said here because the name that gets typed is usually not a
+            # typo: `--sandbox` is a flag two of the agents have of their
+            # own, and sticky's parser takes it first. Flags sticky does not
+            # know already go to the agent; the ones it does know need `--`
+            # to get there, and that is the whole of the fix.
+            die(f"no such sandbox: {asked} (one of {fence_choices()})"
+                f"\n  --sandbox is sticky's own fence. If you meant the "
+                f"agent's flag of that name, put it after `--`, where "
+                f"everything\n  reaches the agent untouched:\n"
+                f"    sticky-chat start . -- --sandbox {asked}")
     elif inherited or getattr(args, "agent_cmd", None):
         return command
     else:
