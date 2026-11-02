@@ -101,7 +101,7 @@ from .store import (
     with_words,
     without_session,
 )
-from .tmux import SESSION_NAME, Tmux
+from .tmux import SESSION_NAME, Tmux, no_floating_panes
 from .util import (
     BOLD,
     CLOCK_HIT,
@@ -198,7 +198,13 @@ def open_prompt(tm: Tmux, command: list[str], pane: str | None,
     if pane:
         made += ["-t", pane]
     made.append(" ".join(shell_quote(c) for c in command))
-    where = tm.run(*made).strip()
+    try:
+        where = tm.run(*made).strip()
+    except RuntimeError as exc:
+        # tmux's own words for a missing command are `unknown command:
+        # new-pane`, which is true and points nowhere. The version is what
+        # it comes down to, said in terms of the fix.
+        raise RuntimeError(no_floating_panes(tm) or str(exc)) from exc
     if where:
         # What marks it for the sweep that closes it when you click away.
         tm.ok("set-option", "-p", "-t", where, "@sticky_role", "note")
@@ -312,10 +318,12 @@ def cmd_add(args) -> int:
     try:
         open_prompt(tm, self_cmd, pane)
     except RuntimeError as exc:
-        print(f"sticky: could not open the prompt ({exc}); note saved as "
-              f"{note['id']}, set text with: "
-              f"sticky-chat note {note['id']}",
-              file=sys.stderr)
+        # Told on the message line: this runs from copy-pipe, which throws
+        # away whatever is printed, so a drag that went nowhere looked
+        # like the terminal's own selection and nothing else.
+        tell(tm, getattr(args, "client", None),
+             f"could not open the prompt: {exc}. Note {note['id']} is saved "
+             f"without text; `sticky-chat note {note['id']}` asks for it")
         return 1
     if pane:
         leave_copy_mode(tm, pane, args)
@@ -547,9 +555,11 @@ def cmd_commit(args) -> int:
             # a line of shapes and a line of where the guess came from
             # above the line you type on.
             open_prompt(tm, command, pane, "40%")
-        except RuntimeError:
-            tm.ok("display-message", "sticky: could not open the prompt")
-            return 1
+        except RuntimeError as exc:
+            # 0, said or not: run-shell answers a 1 with its own `returned
+            # 1`, over the top of the message that says why.
+            tm.ok("display-message", f"sticky: could not open the prompt: {exc}")
+            return 0
         return 0
 
     # Later, rather than now. The deadline lives on the pane, so it
@@ -1668,10 +1678,10 @@ def open_reopen_prompt(tm: Tmux, binary: str, args) -> int:
         command += ["--client", args.client]
     try:
         open_prompt(tm, command, getattr(args, "source_pane", None), "40%")
-    except RuntimeError:
+    except RuntimeError as exc:
         tell(tm, getattr(args, "client", None),
-             "could not open the reopen prompt")
-        return 1
+             f"could not open the reopen prompt: {exc}")
+        return 0                        # see open_project_prompt
     return 0
 
 
@@ -2244,9 +2254,12 @@ def open_project_prompt(tm: Tmux, binary: str, args) -> int:
 
     try:
         open_prompt(tm, command, getattr(args, "source_pane", None), "40%")
-    except RuntimeError:
-        tm.ok("display-message", "sticky: could not open the project prompt")
-        return 1
+    except RuntimeError as exc:
+        # 0 although it failed: run-shell answers a 1 with its own
+        # `returned 1`, written over the message that says why.
+        tm.ok("display-message",
+              f"sticky: could not open the project prompt: {exc}")
+        return 0
     return 0
 
 

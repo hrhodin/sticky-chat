@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import shutil
 import subprocess
 import sys
@@ -51,18 +50,9 @@ def sticky():
     return sticky_chat
 
 
-MIN_TMUX = (3, 7)               # floating panes, which the note prompt is
-
-
-def tmux_version(text: str) -> tuple[int, ...]:
-    """The version out of `tmux -V`, as numbers. Empty if it cannot be read.
-
-    Releases are `tmux 3.7c`; a development build says `tmux next-3.8`. The
-    letter is a patch level and the `next-` prefix means newer than the
-    release it names, so both are safely read as their leading numbers.
-    """
-    found = re.search(r"(\d+)\.(\d+)", text)
-    return tuple(int(part) for part in found.groups()) if found else ()
+# The same floor sticky warns about at startup, read the same way.
+sys.path.insert(0, str(ROOT / "src"))
+from sticky_chat.tmux import MIN_TMUX, tmux_version  # noqa: E402
 
 
 @pytest.fixture(scope="session")

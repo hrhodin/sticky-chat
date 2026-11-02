@@ -42,7 +42,7 @@ from .config import DEFAULT_SIDEBAR_WIDTH, default_virtual_rows
 from .sandbox import DEFAULT_IMAGE, fence_choices
 from .sidebar import AUTO_STEP, cmd_sidebar
 from .store import last_run
-from .tmux import Tmux
+from .tmux import Tmux, old_tmux
 from .util import die
 
 # --------------------------------------------------------------------- main
@@ -379,6 +379,31 @@ def split_our_flags(argv: list[str]) -> tuple[list[str], list[str]]:
     return ours, theirs
 
 
+# What a person runs to begin, as against what a key binding runs from
+# inside: those are the starts worth stopping to warn at.
+STARTS = (cmd_start, cmd_attach, cmd_resume)
+
+
+def tmux_too_old(socket: str | None) -> bool:
+    """Warn about a tmux too old for sticky, every time. True to stop.
+
+    Every time, because nothing gets better until a newer tmux is
+    installed, and what an old one does otherwise is fail later and say
+    less: `C-g c` and a drag over the agent both come to `returned 1`. Only
+    at a terminal, where it is a person starting up - a key binding's
+    run-shell has none, and is told at the prompt that did not open. The
+    warning is held until Enter, because attaching repaints the screen
+    over anything printed before it.
+    """
+    if not sys.stderr.isatty():
+        return False
+    problem = old_tmux(socket)
+    if not problem:
+        return False
+    print(f"sticky: {problem}", file=sys.stderr)
+    return ask("sticky: go on anyway?", "y/n") in ("n", "q")
+
+
 def guarded(func, args) -> int:
     """Run a subcommand, and say what went wrong rather than traceback.
 
@@ -447,6 +472,8 @@ def main(argv: list[str] | None = None) -> int:
         args = parser.parse_args(["start", *rest])
         args.claude_args = []
         socket = args.socket or args.top_socket
+        if tmux_too_old(socket):
+            return 1
         if Tmux(socket).server_running():
             return guarded(cmd_attach, argparse.Namespace(socket=socket))
         # Named, not counted: what makes this worth a yes is seeing that
@@ -470,4 +497,8 @@ def main(argv: list[str] | None = None) -> int:
         args.socket = args.top_socket
     if getattr(args, "sticky_dir", None):
         args.dir = args.sticky_dir
+    if (args.func in STARTS and not getattr(args, "ask", False)
+            and not getattr(args, "ask_here", False)
+            and tmux_too_old(args.socket)):
+        return 1
     return guarded(args.func, args)

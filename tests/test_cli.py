@@ -2748,3 +2748,110 @@ class TestWhenTmuxWillNotStart:
 
     def test_what_a_subcommand_returns_comes_back(self, sticky):
         assert sticky.guarded(lambda _args: 3, argparse.Namespace()) == 3
+
+
+def fake_tmux(tmp_path, client="tmux 3.4", server="3.4", running=True):
+    """A `tmux` on PATH that answers the version questions and fails the
+    rest the way an old one does - `new-pane` is a command it never heard
+    of."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    script = bin_dir / "tmux"
+    script.write_text(
+        "#!/bin/sh\n"
+        f'[ "$1" = -V ] && {{ echo "{client}"; exit 0; }}\n'
+        'for word in "$@"; do\n'
+        f'  case "$word" in\n'
+        f'    has-session) exit {0 if running else 1} ;;\n'
+        f"    '#{{version}}') echo {server}; exit 0 ;;\n"
+        '    new-pane) echo "unknown command: new-pane" >&2; exit 1 ;;\n'
+        "  esac\n"
+        "done\n"
+        "exit 0\n")
+    script.chmod(0o755)
+    return str(bin_dir)
+
+
+class TestAnOldTmuxIsSaidAtTheStart:
+    """tmux 3.4 is what a managed Ubuntu box has, and it has no floating
+    panes. Nothing failed at the start: the session came up, and then
+    `C-g c` said `returned 1` and a drag over the agent said nothing at
+    all. So the version is checked where a person starts, every time, and
+    a prompt that cannot open says why on the message line."""
+
+    def test_versions_are_read_by_their_leading_numbers(self, sticky):
+        assert sticky.too_old("tmux 3.4")
+        assert not sticky.too_old("tmux 3.7c")
+        assert not sticky.too_old("tmux next-3.8"), "newer than 3.8"
+        assert not sticky.too_old("tmux master"), "unreadable is no reason"
+
+    def test_an_old_tmux_on_the_path_is_named(self, sticky, tmp_path,
+                                              monkeypatch):
+        monkeypatch.setenv("PATH", fake_tmux(tmp_path, running=False))
+        said = sticky.old_tmux("/tmp/none")
+        assert "tmux 3.4 is older than tmux 3.7" in said
+        assert "~/.local" in said, "and the way out that needs no root"
+
+    def test_an_old_server_under_a_new_client_is_named_too(self, sticky,
+                                                          tmp_path,
+                                                          monkeypatch):
+        """What installing a newer tmux leaves behind until the old server
+        is stopped: tmux -V says 3.7c and every prompt still fails."""
+        monkeypatch.setenv("PATH", fake_tmux(tmp_path, client="tmux 3.7c"))
+        said = sticky.old_tmux("/tmp/none")
+        assert "server already running is tmux 3.4" in said
+        assert "sticky-chat quit" in said
+
+    def test_a_new_enough_tmux_says_nothing(self, sticky, tmp_path,
+                                            monkeypatch):
+        monkeypatch.setenv("PATH", fake_tmux(tmp_path, client="tmux 3.7c",
+                                             server="3.7c"))
+        assert sticky.old_tmux("/tmp/none") == ""
+
+    def test_the_warning_waits_for_the_person_it_is_for(self, sticky,
+                                                        monkeypatch, capsys):
+        """Held at a question, because attaching repaints the screen over
+        anything printed just before it."""
+        monkeypatch.setattr(sticky.cli, "old_tmux", lambda s: "tmux 3.4 ...")
+        monkeypatch.setattr(sys.stderr, "isatty", lambda: True)
+        asked = []
+        monkeypatch.setattr(sticky.cli, "ask",
+                            lambda q, c: asked.append(q) or "y")
+        assert sticky.tmux_too_old(None) is False, "Enter goes on"
+        assert asked, "and it was asked"
+        assert "tmux 3.4" in capsys.readouterr().err
+        monkeypatch.setattr(sticky.cli, "ask", lambda q, c: "n")
+        assert sticky.tmux_too_old(None) is True, "n stops"
+
+    def test_a_key_binding_is_not_held_up(self, sticky, monkeypatch):
+        """run-shell has no terminal, and nobody to answer."""
+        monkeypatch.setattr(sys.stderr, "isatty", lambda: False)
+        monkeypatch.setattr(sticky.cli, "old_tmux",
+                            lambda s: pytest.fail("not even asked"))
+        assert sticky.tmux_too_old(None) is False
+
+    def test_a_prompt_that_cannot_open_says_why(self, sticky, tmp_path,
+                                                monkeypatch):
+        monkeypatch.setenv("PATH", fake_tmux(tmp_path))
+        with pytest.raises(RuntimeError) as raised:
+            sticky.commands.open_prompt(sticky.Tmux("/tmp/none"), ["true"], None)
+        said = str(raised.value)
+        assert "tmux 3.4 has no floating panes" in said
+        assert "3.7 or newer" in said
+
+    def test_the_new_tab_key_leaves_its_message_standing(self, sticky,
+                                                         tmp_path,
+                                                         monkeypatch):
+        """A 1 from run-shell is answered with tmux's own `returned 1`,
+        written over the message that said why."""
+        monkeypatch.setenv("PATH", fake_tmux(tmp_path))
+        said = []
+        tm = sticky.Tmux("/tmp/none")
+        monkeypatch.setattr(tm, "ok", lambda *a: said.append(a) or True)
+        args = argparse.Namespace(
+            socket="/tmp/none", client=None, source_pane=None,
+            virtual_rows=None, sidebar_width=sticky.DEFAULT_SIDEBAR_WIDTH,
+            local=False, menus=False, agent=None, agent_cmd=None,
+            sandbox=None, sandbox_image=None, sandbox_arg=None, dir=None)
+        assert sticky.open_project_prompt(tm, "sticky-chat", args) == 0
+        assert any("no floating panes" in " ".join(a) for a in said)

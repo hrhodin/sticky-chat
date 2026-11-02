@@ -56,10 +56,12 @@ from .agents import (
 from .cli import (
     GLOBAL_FLAGS,
     OUR_FLAGS,
+    STARTS,
     build_parser,
     guarded,
     main,
     split_our_flags,
+    tmux_too_old,
 )
 from .clipboard import clipboard_command, to_clipboard
 from .commands import (
@@ -291,7 +293,16 @@ from .store import (
     with_words,
     without_session,
 )
-from .tmux import DEFAULT_SOCKET, SESSION_NAME, Tmux
+from .tmux import (
+    DEFAULT_SOCKET,
+    MIN_TMUX,
+    SESSION_NAME,
+    Tmux,
+    no_floating_panes,
+    old_tmux,
+    tmux_version,
+    too_old,
+)
 from .util import (
     ANSI,
     ARROWS,

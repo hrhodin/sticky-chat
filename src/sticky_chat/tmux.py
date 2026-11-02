@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import sys
 
@@ -17,6 +18,61 @@ def die(message: str) -> None:
 SESSION_NAME = "sticky"
 
 # --------------------------------------------------------------------- tmux
+
+MIN_TMUX = (3, 7)               # floating panes, which every prompt is
+
+
+def tmux_version(text: str) -> tuple[int, ...]:
+    """The version out of `tmux -V` or `#{version}`, as numbers.
+
+    Releases are `tmux 3.7c`; a development build says `tmux next-3.8`. The
+    letter is a patch level and the `next-` prefix means newer than the
+    release it names, so both are safely read as their leading numbers.
+    Empty when there is nothing to read, which callers take as "fine": a
+    version string nobody can parse is no reason to refuse to start.
+    """
+    found = re.search(r"(\d+)\.(\d+)", text)
+    return tuple(int(part) for part in found.groups()) if found else ()
+
+
+def too_old(text: str) -> bool:
+    version = tmux_version(text)
+    return bool(version) and version < MIN_TMUX
+
+
+def old_tmux(socket: str | None = None) -> str:
+    """What is wrong with the tmux sticky would run on, or "" if nothing.
+
+    Two versions, because they can differ: the `tmux` on PATH, and the
+    server already running on the socket. Installing a newer tmux leaves
+    the old server up, and every command then reaches a server without
+    floating panes - so a tmux -V that says 3.7c is no proof on its own.
+    An old tmux does not fail at the start; it fails at the first prompt, as
+    `returned 1` and nothing else, which is why this is said up front.
+    """
+    need = ".".join(str(n) for n in MIN_TMUX)
+    tm = Tmux(socket)
+    try:
+        client = subprocess.run(["tmux", "-V"], capture_output=True,
+                                text=True).stdout.strip()
+    except FileNotFoundError:
+        return ""                       # Tmux.run says that one itself
+    if too_old(client):
+        return (f"{client} is older than tmux {need}, which sticky needs "
+                f"for floating panes: no note prompt, no new-tab prompt, no "
+                f"reopen picker. A newer tmux built into ~/.local works "
+                f"without root - see Requirements in the README.")
+    if tm.server_running():
+        try:
+            server = tm.run("display-message", "-p", "#{version}").strip()
+        except RuntimeError:
+            return ""
+        if too_old(server):
+            return (f"the sticky server already running is tmux {server}, "
+                    f"older than {need}, though {client} is on your PATH. "
+                    f"It was started before the newer tmux was installed; "
+                    f"`sticky-chat quit` and start again to move onto it.")
+    return ""
 
 
 def why(said: str) -> str:
@@ -49,6 +105,23 @@ def why(said: str) -> str:
             f"      shell-integration-features = ssh-env,ssh-terminfo, or "
             f"kitty's\n"
             f"      kitten ssh")
+
+
+def no_floating_panes(tm: Tmux) -> str:
+    """One status-line sentence, if the server is too old for a prompt.
+
+    Short, because it is read on tmux's message line rather than a
+    terminal; `old_tmux` is the long form, said at startup.
+    """
+    try:
+        server = tm.run("display-message", "-p", "#{version}").strip()
+    except RuntimeError:
+        return ""
+    if not too_old(server):
+        return ""
+    need = ".".join(str(n) for n in MIN_TMUX)
+    return (f"tmux {server} has no floating panes; sticky needs {need} or "
+            f"newer (README: Requirements)")
 
 
 class Tmux:

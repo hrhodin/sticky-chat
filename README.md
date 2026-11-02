@@ -33,6 +33,17 @@ Start it with `sticky-chat` (or shorthands `sticky claude`)  and possible argume
   update, so the sidebar never tears. Until `pane-activity` reaches a tmux
   release, the sidebar checks the pane twice a second rather than being woken
   when the agent prints — cheap, but not free.
+  sticky checks the version every time it starts and says so if it is
+  older. A managed machine whose packaged tmux is older (Ubuntu 24.04 ships
+  3.4) does not need root for a newer one:
+  ```sh
+  curl -LO https://github.com/tmux/tmux/releases/download/3.7c/tmux-3.7c.tar.gz
+  tar xf tmux-3.7c.tar.gz && cd tmux-3.7c
+  ./configure --prefix=$HOME/.local && make -j4 && make install
+  ```
+  then put `~/.local/bin` first on your `PATH`, and stop a sticky server the
+  old tmux is still running (`sticky-chat quit`) so the next start is on the
+  new one.
 - **Python 3.9 or newer**. The program itself uses only the standard
   library, so it pulls in nothing else.
 - **An agent.** Claude Code on your `PATH` as `claude` is the default;
@@ -998,7 +1009,7 @@ readable in a light or a dark scheme.
 |---|---|
 | `sticky-chat: command not found` | the install directory is not on your `PATH` |
 | `the command exited immediately` | the agent is not on your `PATH`; pass `--agent-cmd /full/path/to/claude` |
-| no prompt after a drag | tmux older than 3.7, which has no floating panes — check `tmux -V` |
+| no prompt after a drag, or `C-g c` says `returned 1` | tmux older than 3.7, which has no floating panes — check `tmux -V`, and see Requirements |
 | a note turns orange | the text under it changed; the position shown is a guess |
 | notes stuck off-screen | scroll back to the text, or `sticky-chat list` to see them all |
 | `C-b` does nothing | inside sticky-chat the prefix is `C-g` |
