@@ -12,7 +12,13 @@ import time
 
 from .agents import CLAUDE, Agent, discover_session, limit_notice
 from .placement import VIEW_FORMAT, pane_view, parse_view, resolve
-from .store import agent_of, open_store, record_window, resolve_project
+from .store import (
+    agent_of,
+    conversations_open,
+    open_store,
+    record_window,
+    resolve_project,
+)
 from .tmux import Tmux
 from .util import (
     BOLD,
@@ -1488,6 +1494,15 @@ def cmd_sidebar(args) -> int:
                 # never before one is drawn.
                 found = discover_session(agent, launched, agent_home(),
                                          project=project, named=agent_session)
+                if found and (agent.name, found) in conversations_open(
+                        tm, but=pane):
+                    # Another tab's conversation, not this one's: all a
+                    # database can be asked is the newest conversation in
+                    # this project, and two tabs started there a moment
+                    # apart both get the same answer until this one has
+                    # written its own. Adopted, both records would reopen
+                    # one conversation twice. Asked again next time round.
+                    found = ""
                 if found:
                     # Only the window record, and only in a field of its
                     # own. The notes stay in the `tab-` directory they were

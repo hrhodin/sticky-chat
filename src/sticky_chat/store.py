@@ -408,6 +408,40 @@ def tabs_showing(tm: Tmux) -> set[str]:
     return {part for line in rows for part in line.split("\t") if part}
 
 
+def conversations_open(tm: Tmux, but: str = "") -> set[tuple[str, ...]]:
+    """The conversations the agent panes on screen are running, as keys.
+
+    Two kinds, the same two `conversation_of` makes for a record: an id the
+    pane is known by - ours for a tab we named, the agent's own once a
+    sidebar has read it back - and "the last one in this project" for every
+    agent pane at all, because that is where an agent asked for its last
+    conversation in that directory lands while one is running there.
+
+    `but` leaves one pane out: a sidebar asking which ids are taken must not
+    count the pane it is hunting for.
+    """
+    try:
+        rows = tm.run("list-panes", "-a", "-F",
+                      "#{pane_id}\t#{@sticky_role}\t#{@sticky_agent}\t"
+                      "#{@sticky_session}\t#{@sticky_agent_session}\t"
+                      "#{@sticky_project}").splitlines()
+    except RuntimeError:
+        return set()
+    out: set[tuple[str, ...]] = set()
+    for line in rows:
+        pane, role, agent, session, found, project = (
+            line.split("\t") + [""] * 6)[:6]
+        if role != "claude" or pane == but:
+            continue
+        agent = agent or "claude"
+        for named in (session, found):
+            if named:
+                out.add((agent, named))
+        if project:
+            out.add((agent, os.path.realpath(project), "last"))
+    return out
+
+
 def open_store(tm: Tmux, pane: str | None, project: str | None = None,
                directory: str | None = None) -> Store:
     """The notes this pane is showing.

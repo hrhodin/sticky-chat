@@ -2517,6 +2517,69 @@ class TestTheLastRunOfTabs:
         assert asked == [] and opened == ["tab-0", "tab-1"]
 
 
+    def codex_tabs(self, sticky, home, monkeypatch, *found):
+        """Codex tabs in one project, newest first, each with the
+        conversation id its sidebar read back - or none."""
+        monkeypatch.setattr(sticky.store, "STATE_HOME", str(home))
+        now = time.time()
+        for number, agent_session in enumerate(found):
+            sticky.record_window(
+                f"tab-{number}", touch=False, project=str(home),
+                name=f"tab-{number}", agent="codex", command="codex",
+                continued=True, index=number + 1, last_seen=now - number,
+                **({"agent_session": agent_session} if agent_session
+                   else {}))
+
+    def test_two_tabs_without_an_id_are_one_conversation(
+            self, sticky, tmp_path, monkeypatch, capsys):
+        """Both would come back as `codex resume --last`, which is the same
+        conversation in two tabs. The newer is kept, the other said."""
+        self.codex_tabs(sticky, tmp_path, monkeypatch, "", "")
+        opened = self.resume(sticky, monkeypatch, self.FakeTmux(), "y")[1]
+        assert opened == ["tab-0"]
+        assert "left out tab-1" in capsys.readouterr().out
+
+    def test_two_tabs_with_the_same_id_are_one_conversation(
+            self, sticky, tmp_path, monkeypatch):
+        self.codex_tabs(sticky, tmp_path, monkeypatch, "c0de", "c0de", "f00d")
+        opened = self.resume(sticky, monkeypatch, self.FakeTmux(), "y")[1]
+        assert sorted(opened) == ["tab-0", "tab-2"]
+
+    def test_tabs_with_ids_of_their_own_all_come_back(
+            self, sticky, tmp_path, monkeypatch):
+        """And one id-less tab beside them still gets the last
+        conversation: nothing else is asking for it."""
+        self.codex_tabs(sticky, tmp_path, monkeypatch, "c0de", "f00d", "")
+        opened = self.resume(sticky, monkeypatch, self.FakeTmux(), "y")[1]
+        assert sorted(opened) == ["tab-0", "tab-1", "tab-2"]
+
+    def test_a_conversation_running_already_is_not_opened_again(
+            self, sticky, tmp_path, monkeypatch):
+        """Under another record: a pane on screen running the same
+        conversation, or any codex pane in the project for a record that
+        would ask for the last one there."""
+        self.codex_tabs(sticky, tmp_path, monkeypatch, "c0de", "f00d")
+        running = f"%5\tclaude\tcodex\ttab-9\tc0de\t{tmp_path}\n"
+        opened = self.resume(sticky, monkeypatch,
+                             self.FakeTmux(running), "y")[1]
+        assert opened == ["tab-1"]
+
+        other = tmp_path / "other"
+        other.mkdir()
+        self.codex_tabs(sticky, other, monkeypatch, "")
+        running = f"%5\tclaude\tcodex\ttab-9\t\t{other}\n"
+        assert sticky.conversation_of(sticky.known_windows()[0]) == (
+            "codex", os.path.realpath(str(other)), "last")
+        _, repeats = sticky.once_each(sticky.known_windows(),
+                                         self.FakeTmux(running))
+        assert [r["session"] for r in repeats] == ["tab-0"]
+
+    def test_a_new_conversation_collides_with_nothing(self, sticky):
+        """A line that opens a fresh one - an agent that cannot be asked
+        for an old one - has no key, and is never left out."""
+        assert sticky.conversation_of(
+            {"agent": "shell", "command": "/bin/zsh", "project": "/"}) == ()
+
 class TestTheDismissingClick:
     """Clicking away from a prompt finishes the note, and nothing else.
 

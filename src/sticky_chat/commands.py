@@ -84,6 +84,7 @@ from .store import (
     Store,
     agent_of,
     claude_pane,
+    conversations_open,
     in_tab_order,
     known_windows,
     last_run,
@@ -1420,6 +1421,51 @@ def not_showing(records: list[dict], tm: Tmux) -> list[dict]:
             and r.get("store") not in here]
 
 
+def conversation_of(record: dict) -> tuple[str, ...]:
+    """Which conversation reopening this record lands on, as a key.
+
+    Two records can share one, and that is what put the same conversation
+    in two tabs after a resume. By id, when the line asks for one by name:
+    a sidebar can read back the same id for two tabs started a moment apart
+    in one project, since all it can ask is "the newest conversation here".
+    And by project, when the line asks for the last conversation - every
+    codex tab whose id was never read back comes back as `codex resume
+    --last`, and two of those in one directory are the same conversation
+    twice. Empty when the line opens a new one, which nothing can collide
+    with.
+    """
+    agent = agent_named(record.get("agent"))
+    command = resume_command(record, agent)
+    named = session_named(command, agent)
+    if named:
+        return (agent.name, named)
+    words = inner_command(command).split()
+    if agent.continue_flags and any(w in agent.continue_flags for w in words):
+        return (agent.name, os.path.realpath(record.get("project", "")),
+                "last")
+    return ()
+
+
+def once_each(records: list[dict], tm: Tmux) -> tuple[list[dict], list[dict]]:
+    """The records to reopen, and the ones left out as repeats.
+
+    Newest first in, so the copy that was in use most recently is the one
+    kept. A conversation already running in a pane counts as taken: the
+    agent either refuses a second tab on it or - worse - lets both write.
+    """
+    taken = conversations_open(tm)
+    keep, repeats = [], []
+    for record in records:
+        key = conversation_of(record)
+        if key and key in taken:
+            repeats.append(record)
+            continue
+        if key:
+            taken.add(key)
+        keep.append(record)
+    return keep, repeats
+
+
 def forget_window(session: str) -> None:
     try:
         os.unlink(os.path.join(windows_dir(), f"{session}.json"))
@@ -1461,7 +1507,13 @@ def cmd_resume(args) -> int:
         take_all = True                 # asked for as a set, just below
 
     tm = Tmux(args.socket)
-    wanted = not_showing(records, tm)
+    wanted, repeats = once_each(not_showing(records, tm), tm)
+    if repeats:
+        # Said, not silently dropped: the record is still there for
+        # `resume --all`, and two tabs you remember having are now one.
+        names = ", ".join(tab_name(r) for r in repeats)
+        print(f"sticky: left out {names}: it would reopen a conversation "
+              f"that is already open or coming back")
     if not wanted:
         print("sticky: those tabs are open already" if records
               else "sticky: nothing left to reopen")
@@ -1622,7 +1674,7 @@ def reopenable(tm: Tmux) -> list[dict]:
             continue
         if os.path.isdir(record.get("project", "")):
             out.append(record)
-    return out
+    return once_each(out, tm)[0]
 
 
 def pick_tab(records: list[dict]) -> dict | None:
