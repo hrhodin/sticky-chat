@@ -400,6 +400,7 @@ tmux keeps whatever prefix you configured.
 | `C-g C` | the same, but the tab gets a window taller than the terminal |
 | `C-g F` | fork this conversation into a new tab |
 | `C-g o` | reopen a closed tab: lists what is remembered, a number picks |
+| `C-g ,`, or double-click the tab you are in | rename the tab; the name comes back with it on resume, and an empty one puts the project's back |
 | `C-g B` `C-g b` | box this tab in a container, or take it back out |
 | `C-g a` `C-g A` | carry on for five more turns (stacks), or until told otherwise |
 | `C-g k` | stop what the tab is running — not the tab |

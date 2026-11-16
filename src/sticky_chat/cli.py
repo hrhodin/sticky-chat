@@ -27,6 +27,7 @@ from .commands import (
     cmd_quit,
     cmd_refence,
     cmd_reload,
+    cmd_rename,
     cmd_reopen,
     cmd_restore,
     cmd_resume,
@@ -304,6 +305,16 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--client")
     p.add_argument("--quiet", action="store_true")
     p.set_defaults(func=cmd_auto)
+
+    p = sub.add_parser("rename", help="name a tab, kept for when it reopens")
+    p.add_argument("--window", required=True, help="the tab, as @id")
+    p.add_argument("--ask", action="store_true",
+                   help="put up a prompt for the name")
+    p.add_argument("--settled", action="store_true",
+                   help="only if the tab has been active for a moment")
+    p.add_argument("--client")
+    p.add_argument("--socket")
+    p.set_defaults(func=cmd_rename)
 
     p = common(sub.add_parser(
         "refence", help="move a running tab into a box, or out of one"))

@@ -3315,9 +3315,88 @@ def attach(tm: Tmux, window: str | None, client: str | None = None) -> int:
     return subprocess.call(cmd)
 
 
+# How long a tab has to have been the one you are in before a double click
+# on it renames it. Shorter than that, the click is what brought you there.
+RENAME_SETTLE = 0.5
+
+
+def tab_agent_pane(tm: Tmux, window: str) -> tuple[str, str]:
+    """The tab's record key and project, read off its agent pane."""
+    try:
+        rows = tm.run("list-panes", "-t", window, "-F",
+                      "#{@sticky_role}\t#{@sticky_session}\t"
+                      "#{@sticky_project}").splitlines()
+    except RuntimeError:
+        return "", ""
+    for line in rows:
+        role, session, project = ([*line.split("\t"), "", ""])[:3]
+        if role == "claude":
+            return session, project
+    return "", ""
+
+
+def cmd_rename(args) -> int:
+    """Name a tab, and keep the name for when it is reopened.
+
+    `--ask` puts tmux's own prompt up, filled with the name it has now; a
+    double click on the status line and `C-g ,` both come here. From a
+    click it only asks once the tab has been yours for RENAME_SETTLE
+    seconds - otherwise a double click on another tab would switch to it
+    and rename it in one breath. What the prompt runs is `rename-window`
+    and then this again without `--ask`, which reads the name back off the
+    window rather than off a shell line, so no name needs quoting twice.
+    Saved in the tab's record, so `resume` brings it back under the name
+    you gave it. An empty name puts the project's back.
+    """
+    tm = Tmux(args.socket)
+    window = args.window
+    if args.ask:
+        if args.settled:
+            # The stamp is written by the hook the first click set off,
+            # which runs in the background: a moment's grace, so a click
+            # that switched tabs is not read before it says so.
+            time.sleep(0.15)
+            arrived = tm.run("show-options", "-wqv", "-t", window,
+                             "@sticky_arrived").strip()
+            try:
+                if time.time() - float(arrived) < RENAME_SETTLE:
+                    return 0
+            except ValueError:
+                pass                    # never stamped: it has been a while
+        name = tm.fmt(window, "#{window_name}")
+        again = [self_path(), "rename", "--window", window]
+        if args.socket:
+            again += ["--socket", args.socket]
+        shell = " ".join(shell_quote(word) for word in again)
+        quoted = shell.replace("\\", "\\\\").replace('"', '\\"')
+        prompt = ["command-prompt", "-I", name, "-p", "tab name:",
+                  f'rename-window -t {window} -- "%%" ; '
+                  f'run-shell -b "{quoted}"']
+        if args.client:
+            prompt[1:1] = ["-t", args.client]
+        tm.ok(*prompt)
+        return 0
+
+    session, project = tab_agent_pane(tm, window)
+    name = tm.fmt(window, "#{window_name}").strip()
+    if not name:
+        name = os.path.basename(project.rstrip("/")) or "?"
+        tm.ok("rename-window", "-t", window, "--", name)
+    if session:
+        record_window(session, touch=False, name=name)
+    return 0
+
+
 def cmd_fit(args) -> int:
     """Put the sidebars and the viewport back; run from tmux's hooks."""
     tm = Tmux(args.socket)
+    if getattr(args, "wake", ""):
+        # When this tab was arrived at, first of everything: a double click
+        # on a tab you are not in is a click that switches and a click that
+        # renames, a few milliseconds apart, and `rename --ask` tells the
+        # two apart by this stamp alone.
+        tm.ok("set-option", "-w", "-t", args.wake, "@sticky_arrived",
+              f"{time.time():.3f}")
     try:
         listing = tm.run("list-panes", "-a", "-F",
                          "#{pane_id}\t#{@sticky_role}\t#{@sticky_width}\t"

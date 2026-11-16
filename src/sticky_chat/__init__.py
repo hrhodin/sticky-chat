@@ -92,6 +92,7 @@ from .commands import (
     cmd_quit,
     cmd_refence,
     cmd_reload,
+    cmd_rename,
     cmd_reopen,
     cmd_restore,
     cmd_resume,

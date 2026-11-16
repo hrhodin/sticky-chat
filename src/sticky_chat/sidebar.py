@@ -292,6 +292,7 @@ def help_sections(agent: Agent = CLAUDE) -> list[tuple[str, list[str]]]:
             "C-g n next \u00b7 C-g w list",
             "C-g C new, tall window",
             "C-g o reopens a closed tab",
+            "C-g , or double-click it renames",
             "C-g F forks chat and notes",
             "C-g B box · C-g b unbox",
             "C-g k stops what it is running",

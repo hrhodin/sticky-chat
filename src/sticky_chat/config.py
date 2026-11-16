@@ -378,6 +378,13 @@ bind -T root MouseDown1StatusLeft select-pane -t "{next}"
 # before.
 bind -T root MouseDown1Status { if -F "#{@sticky_log}" { run-shell -b '@BIN@ trace "click on tab #{window_index} at #{mouse_x},#{mouse_y} (status row #{mouse_status_line})" --socket "#{socket_path}"' } ; switch-client -t = }
 
+# A double click on the tab you are in names it - the one you have been in
+# for half a second, so the double click that lands on another tab only
+# takes you there. `C-g ,` is tmux's own key for the same thing, kept, and
+# both go through sticky so the name is still there after a resume.
+bind -T root DoubleClick1Status run-shell -b '@BIN@ rename --ask --settled --window "#{window_id}" --client "#{client_name}" --socket "#{socket_path}"'
+bind , run-shell -b '@BIN@ rename --ask --window "#{window_id}" --client "#{client_name}" --socket "#{socket_path}"'
+
 # the wheel over the sidebar pages through the note history; everywhere else
 # this is tmux's own default binding
 # single click shows where a note came from, double click edits it, and the

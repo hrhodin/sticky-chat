@@ -2918,3 +2918,102 @@ class TestAnOldTmuxIsSaidAtTheStart:
             sandbox=None, sandbox_image=None, sandbox_arg=None, dir=None)
         assert sticky.open_project_prompt(tm, "sticky-chat", args) == 0
         assert any("no floating panes" in " ".join(a) for a in said)
+
+
+class TestRenamingATab:
+    """A double click on the tab you are in names it, and the name is kept
+    for when the tab is reopened. The tab has to have been yours for half
+    a second first: a double click on another tab is a click that takes
+    you there and a click on arrival, and only the first was meant."""
+
+    class FakeTmux:
+        def __init__(self, arrived="", name="proj", panes=""):
+            self.socket, self.calls = "test", []
+            self.arrived, self.name, self.panes = arrived, name, panes
+
+        def run(self, *args):
+            self.calls.append(args)
+            if args[0] == "show-options":
+                return self.arrived
+            if args[0] == "list-panes":
+                return self.panes
+            return ""
+
+        def ok(self, *args):
+            self.calls.append(args)
+            return True
+
+        def fmt(self, target, template):
+            return self.name
+
+        def prompted(self):
+            return [c for c in self.calls if c[0] == "command-prompt"]
+
+    def rename(self, sticky, monkeypatch, tm, **flags):
+        monkeypatch.setattr(sticky.commands, "Tmux", lambda socket: tm)
+        monkeypatch.setattr(sticky.commands.time, "sleep", lambda s: None)
+        args = argparse.Namespace(socket="test", window="@3", client="/dev/t",
+                                  **{"ask": False, "settled": False, **flags})
+        assert sticky.cmd_rename(args) == 0
+
+    def test_a_tab_just_arrived_at_is_not_renamed(self, sticky, monkeypatch):
+        tm = self.FakeTmux(arrived=f"{time.time() - 0.1:.3f}")
+        self.rename(sticky, monkeypatch, tm, ask=True, settled=True)
+        assert tm.prompted() == []
+
+    def test_a_tab_you_have_been_in_is(self, sticky, monkeypatch):
+        tm = self.FakeTmux(arrived=f"{time.time() - 5:.3f}")
+        self.rename(sticky, monkeypatch, tm, ask=True, settled=True)
+        prompt = tm.prompted()[0]
+        assert "-I" in prompt and prompt[prompt.index("-I") + 1] == "proj", \
+            "starts from the name it has"
+        assert prompt[prompt.index("-t") + 1] == "/dev/t", "on your client"
+        assert 'rename-window -t @3 -- "%%"' in prompt[-1]
+        assert "rename --window @3" in prompt[-1], "and then kept"
+
+    def test_a_tab_never_stamped_has_been_yours_a_while(self, sticky,
+                                                        monkeypatch):
+        """Opened before this arrived, or the stamp was never written."""
+        tm = self.FakeTmux(arrived="")
+        self.rename(sticky, monkeypatch, tm, ask=True, settled=True)
+        assert tm.prompted()
+
+    def test_the_key_asks_without_waiting(self, sticky, monkeypatch):
+        """`C-g ,` is not a click, so nothing to tell apart."""
+        tm = self.FakeTmux(arrived=f"{time.time():.3f}")
+        self.rename(sticky, monkeypatch, tm, ask=True)
+        assert tm.prompted()
+
+    def test_the_name_goes_into_the_record(self, sticky, tmp_path,
+                                           monkeypatch):
+        monkeypatch.setattr(sticky.store, "STATE_HOME", str(tmp_path))
+        sticky.record_window("tab-1", project="/x/proj", name="proj")
+        tm = self.FakeTmux(name="my tab",
+                           panes="sidebar\t\t\nclaude\ttab-1\t/x/proj\n")
+        self.rename(sticky, monkeypatch, tm)
+        assert sticky.known_windows()[0]["name"] == "my tab"
+
+    def test_an_empty_name_puts_the_projects_back(self, sticky, tmp_path,
+                                                  monkeypatch):
+        monkeypatch.setattr(sticky.store, "STATE_HOME", str(tmp_path))
+        sticky.record_window("tab-1", project="/x/proj", name="old")
+        tm = self.FakeTmux(name="", panes="claude\ttab-1\t/x/proj\n")
+        self.rename(sticky, monkeypatch, tm)
+        assert ("rename-window", "-t", "@3", "--", "proj") in tm.calls
+        assert sticky.known_windows()[0]["name"] == "proj"
+
+    def test_arriving_at_a_tab_stamps_it(self, sticky, monkeypatch):
+        tm = self.FakeTmux()
+        monkeypatch.setattr(sticky.commands, "Tmux", lambda socket: tm)
+        for name in ("fit_windows", "use_client_size", "pin_clients"):
+            monkeypatch.setattr(sticky.commands, name, lambda tm: None)
+        sticky.cmd_fit(argparse.Namespace(socket="test", wake="@3"))
+        stamp = next(c for c in tm.calls if "@sticky_arrived" in c)
+        assert stamp[:4] == ("set-option", "-w", "-t", "@3")
+        assert abs(float(stamp[-1]) - time.time()) < 5
+
+    def test_both_ways_in_are_bound(self, sticky):
+        config = sticky.CONFIG_TEMPLATE
+        assert re.search(r"bind -T root DoubleClick1Status run-shell .*"
+                         r"rename --ask --settled", config)
+        assert re.search(r"bind , run-shell .*rename --ask --window", config)
