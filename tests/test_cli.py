@@ -3017,3 +3017,29 @@ class TestRenamingATab:
         assert re.search(r"bind -T root DoubleClick1Status run-shell .*"
                          r"rename --ask --settled", config)
         assert re.search(r"bind , run-shell .*rename --ask --window", config)
+
+
+class TestCtrlZDoesNotFreezeATab:
+    """An agent reads C-z and pauses itself, and in a sticky tab there is
+    no shell under it to `fg` it back - the tab froze, and everything typed
+    after waited in its input. Tried by hand against tmux with a client
+    attached: the agent pane got nothing, a shell tab got the byte."""
+
+    def binding(self, sticky):
+        return next(line for line in sticky.CONFIG_TEMPLATE.splitlines()
+                    if line.startswith("bind -T root C-z "))
+
+    def test_an_agent_pane_is_told_instead(self, sticky):
+        line = self.binding(sticky)
+        assert "#{==:#{@sticky_role},claude}" in line
+        assert "display-message" in line and "C-g C-z" in line
+
+    def test_a_shell_tab_keeps_it(self, sticky):
+        """Where C-z means what it always means, and `fg` is right there."""
+        line = self.binding(sticky)
+        assert "#{!=:#{@sticky_agent},shell}" in line
+        assert line.rstrip().endswith("{ send-keys C-z }")
+
+    def test_the_way_out_it_names_is_still_tmuxs_own(self, sticky):
+        assert not re.search(r"^(un)?bind C-z", sticky.CONFIG_TEMPLATE,
+                             re.MULTILINE)

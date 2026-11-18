@@ -237,6 +237,16 @@ bind -T copy-mode    M-c send -X copy-pipe-no-clear "@CLIP@"
 # a quoted string rather than in braces, which is where the difference is.
 bind -T root M-c if -F '#{==:#{@sticky_role},note}' { send-keys C-c } { if -F '#{!=:#{@sticky_role},sidebar}' { send-keys M-c } }
 
+# C-z in an agent's pane pauses the agent, and there is no shell under it
+# to `fg` it back: the agent is the pane's own process, so the tab simply
+# froze, and every key after it - a hopeful `fg` included - queued up to be
+# sent the moment something woke it. What C-z was reached for is nearly
+# always sticky itself, which is C-g C-z (tmux's own suspend-client: `fg`
+# in the shell you started it from brings it back) or C-g d. So C-z stops
+# here and says so. A shell tab keeps it, because there it means what it
+# always means and the shell is right there to undo it.
+bind -T root C-z if -F '#{&&:#{==:#{@sticky_role},claude},#{!=:#{@sticky_agent},shell}}' { display-message "sticky: C-z would freeze the agent. C-g C-z backgrounds sticky, C-g d detaches" } { send-keys C-z }
+
 # Dragging in the sidebar has no other purpose than copying, so it goes
 # straight to the system clipboard; over Claude a drag might become a note,
 # which is why that side does not touch the clipboard on its own.

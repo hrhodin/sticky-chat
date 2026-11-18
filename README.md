@@ -410,6 +410,7 @@ tmux keeps whatever prefix you configured.
 | `C-g L` | print the pending notes into the pane |
 | `C-g n` `C-g w` | next tab, choose a tab |
 | `C-g z` `C-g d` | zoom the pane, detach (stop looking; nothing stops) |
+| `C-g C-z` | put sticky itself in the background; `fg` brings it back. A bare `C-z` in an agent tab is caught, since the agent would pause with no shell to resume it |
 | `C-g Q` | quit: close every window and stop the agent sessions |
 | `C-g [` | scroll back through the output |
 | `alt`-drag | let the drag through to a program that wants the mouse itself |
